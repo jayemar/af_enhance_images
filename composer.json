@@ -1,0 +1,22 @@
+{
+    "name": "jayemar/af-enhance-images",
+    "description": "TT-RSS plugin to enhance image quality by rewriting srcset to src",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": ">=7.4"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.5"
+    },
+    "autoload": {
+        "classmap": [
+            "init.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    }
+}
