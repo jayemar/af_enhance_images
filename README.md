@@ -209,51 +209,6 @@ composer install
 
 See `/home/jayemar/projects/homelab/ttrss/BBC-MUNDO-TESTING.md` for detailed manual testing procedures with BBC Mundo feed.
 
-## Migrating from Separate Plugins
-
-If you previously used separate plugins, af_enhance_images v2.0 replaces:
-- ✅ `af_enhance_images` v1.0 (inline image enhancement)
-- ✅ `af_fix_enclosure_type` (MIME type inference)
-- ✅ `af_open_graph` (metadata extraction)
-
-### Migration Steps
-
-1. **Update plugins.conf:**
-   ```diff
-   - /home/jayemar/projects/af_fix_enclosure_type
-   + # Merged into af_enhance_images v2.0
-   - /home/jayemar/projects/af_open_graph
-   + # Merged into af_enhance_images v2.0
-   ```
-
-2. **Run plugin update:**
-   ```bash
-   ./manage-plugins.sh --update
-   ```
-
-3. **Update TTRSS_PLUGINS:**
-   ```diff
-   - TTRSS_PLUGINS=auth_internal, note, af_enhance_images, af_fix_enclosure_type, af_open_graph
-   + TTRSS_PLUGINS=auth_internal, note, af_enhance_images
-   ```
-
-4. **Restart TT-RSS:**
-   ```bash
-   docker compose restart
-   ```
-
-5. **Configure v2.0 features:**
-   - Go to Preferences → Feeds → Image Enhancement
-   - Enable desired features (all disabled by default except inline + type fixing)
-
-### Rollback
-
-If issues occur, uncomment old plugins in `plugins.conf`:
-```conf
-/home/jayemar/projects/af_fix_enclosure_type
-/home/jayemar/projects/af_open_graph
-```
-
 ## Troubleshooting
 
 ### Plugin Not Loading
