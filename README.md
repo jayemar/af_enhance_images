@@ -84,18 +84,13 @@ The plugin provides granular control over each feature:
   - Infer MIME type from URL extension
   - **Default:** Enabled
 
-### Article Page Fetching
-- ( ) **Never fetch** - Fastest, disables OG and enclosure upgrading
-- (•) **Auto-detect (recommended)** - Only fetch if no images exist
-- ( ) **Always fetch** - Fetch every article (slowest)
-- **Default:** Never
-
 ### Open Graph Metadata
 - ☐ **Extract Open Graph metadata**
   - Add og:image as enclosure
   - Set author from og:article:author
   - ☐ **Use og:description for short content**
   - **Default:** Disabled
+  - **Note:** Automatically fetches article page only when RSS feed lacks images
 
 ### Enclosure URL Upgrading
 - ☐ **Upgrade enclosure URLs from article page**
@@ -103,6 +98,7 @@ The plugin provides granular control over each feature:
   - Match and upgrade low-res enclosure URLs
   - **Default:** Disabled
   - **Enable this for BBC Mundo and similar feeds**
+  - **Note:** Automatically fetches article page when enclosures exist
 
 ## Use Cases
 
@@ -116,7 +112,7 @@ The plugin provides granular control over each feature:
 
 ### Summary-Only Feeds
 **Problem:** Feed provides only summaries, no images
-**Solution:** Enable "Extract Open Graph metadata" + set fetch mode to "Auto-detect"
+**Solution:** Enable "Extract Open Graph metadata" (will automatically fetch pages when no images exist)
 
 ### BBC Mundo and Low-Res Enclosures
 **Problem:** Feed provides only 240px thumbnails in enclosures
@@ -130,11 +126,11 @@ The plugin provides granular control over each feature:
 - **Article page fetching:** 1-3 seconds per article (10s timeout)
 
 ### Optimization Tips
-1. **Keep fetch_mode as "never"** if you only need inline enhancement and type fixing
-2. **Enable "upgrade_enclosures"** to trigger fetching only when enclosures exist
+1. **Only enable features you need** - Inline enhancement and type fixing have no network overhead
+2. **Enclosure upgrading is selective** - Only fetches when enclosures exist
    - BBC Mundo always has enclosures → will be processed
    - Feeds without enclosures → no fetch overhead
-3. **Use "auto-detect"** to avoid fetching when articles already have images
+3. **OG extraction is selective** - Only fetches when articles lack images
 4. **Monitor feed update times** after enabling new features
 
 ### Scalability
@@ -244,7 +240,7 @@ TT-RSS caches article GUIDs. Deleted articles won't re-import if they're still i
 
 ### Performance Issues
 
-1. Disable "Always fetch" mode (use "never" or "auto-detect")
+1. Disable article page fetching features if you don't need them (OG extraction, enclosure upgrading)
 2. Only enable "upgrade_enclosures" for feeds that need it
 3. Monitor feed update times: `docker compose logs updater -f`
 

@@ -54,7 +54,6 @@ class Af_Enhance_Images extends Plugin {
 
         $inline_enhancement = $this->host->get($this, "inline_enhancement", true);
         $fix_enclosure_type = $this->host->get($this, "fix_enclosure_type", true);
-        $fetch_mode = $this->host->get($this, "fetch_mode", "never");
         $extract_og = $this->host->get($this, "extract_og", false);
         $enhance_content = $this->host->get($this, "enhance_content", false);
         $upgrade_enclosures = $this->host->get($this, "upgrade_enclosures", false);
@@ -101,37 +100,6 @@ class Af_Enhance_Images extends Plugin {
                 </fieldset>
 
                 <fieldset>
-                    <legend><?= __('Article Page Fetching') ?></legend>
-
-                    <label class="checkbox">
-                        <input dojoType="dijit.form.RadioButton" type="radio" name="fetch_mode" value="never"
-                            <?= $fetch_mode === 'never' ? 'checked' : '' ?>>
-                        <?= __('Never fetch') ?>
-                    </label>
-                    <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Disable article page fetching (fastest, no OG extraction or enclosure upgrading)') ?>
-                    </p>
-
-                    <label class="checkbox">
-                        <input dojoType="dijit.form.RadioButton" type="radio" name="fetch_mode" value="auto"
-                            <?= $fetch_mode === 'auto' ? 'checked' : '' ?>>
-                        <?= __('Auto-detect (recommended)') ?>
-                    </label>
-                    <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Only fetch if article has no inline images and no image enclosures') ?>
-                    </p>
-
-                    <label class="checkbox">
-                        <input dojoType="dijit.form.RadioButton" type="radio" name="fetch_mode" value="always"
-                            <?= $fetch_mode === 'always' ? 'checked' : '' ?>>
-                        <?= __('Always fetch') ?>
-                    </label>
-                    <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Fetch for every article (slowest, enables all features)') ?>
-                    </p>
-                </fieldset>
-
-                <fieldset>
                     <legend><?= __('Open Graph Metadata') ?></legend>
                     <label class="checkbox">
                         <input dojoType="dijit.form.CheckBox" type="checkbox" name="extract_og" value="1"
@@ -139,7 +107,7 @@ class Af_Enhance_Images extends Plugin {
                         <?= __('Extract Open Graph metadata') ?>
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Add og:image as enclosure, set author from og:article:author') ?>
+                        <?= __('Add og:image as enclosure, set author from og:article:author. Fetches article page only when RSS feed lacks images.') ?>
                     </p>
 
                     <label class="checkbox" style="margin-left: 24px;">
@@ -157,7 +125,7 @@ class Af_Enhance_Images extends Plugin {
                         <?= __('Upgrade enclosure URLs from article page') ?>
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Fetch article page and extract high-resolution image URLs from srcset to replace low-res enclosures') ?>
+                        <?= __('Fetches article page when enclosures exist and extracts high-resolution image URLs from srcset to replace low-res enclosures') ?>
                     </p>
                 </fieldset>
 
@@ -189,12 +157,6 @@ class Af_Enhance_Images extends Plugin {
         $fix_enclosure_type = ($_POST['fix_enclosure_type'] ?? '') === '1';
         $this->host->set($this, "fix_enclosure_type", $fix_enclosure_type);
 
-        $fetch_mode = $_POST['fetch_mode'] ?? 'never';
-        if (!in_array($fetch_mode, ['never', 'auto', 'always'])) {
-            $fetch_mode = 'never';
-        }
-        $this->host->set($this, "fetch_mode", $fetch_mode);
-
         $extract_og = ($_POST['extract_og'] ?? '') === '1';
         $this->host->set($this, "extract_og", $extract_og);
 
@@ -223,21 +185,18 @@ class Af_Enhance_Images extends Plugin {
         }
 
         // Feature 3 & 4 & 5: Article page fetching for OG and enclosure upgrading
-        $fetch_mode = $this->host->get($this, "fetch_mode", "never");
         $extract_og = $this->host->get($this, "extract_og", false);
         $upgrade_enclosures = $this->host->get($this, "upgrade_enclosures", false);
 
         // Determine if we need to fetch the article page
         $should_fetch = false;
-        if ($fetch_mode === 'always') {
+
+        // Fetch if OG extraction enabled and article lacks images
+        if ($extract_og && !$this->article_has_images($article)) {
             $should_fetch = true;
-        } elseif ($fetch_mode === 'auto') {
-            if (!$this->article_has_images($article)) {
-                $should_fetch = true;
-            }
         }
 
-        // Also fetch if enclosure upgrading is enabled and we have enclosures
+        // Fetch if enclosure upgrading enabled and article has enclosures
         if ($upgrade_enclosures && !empty($article['enclosures'])) {
             $should_fetch = true;
         }
