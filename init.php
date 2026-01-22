@@ -233,16 +233,10 @@ class Af_Enhance_Images extends Plugin {
      * This prevents TypeError in DiskCache::rewrite_urls()
      */
     public function hook_render_article_api($row) {
-        // Extract the article/headline from the wrapper
-        $is_headline = isset($row['headline']);
-        $article = $is_headline ? $row['headline'] : ($row['article'] ?? null);
+        // Extract article from wrapper
+        $article = isset($row['headline']) ? $row['headline'] : $row['article'];
 
-        // Early exit if no article data
-        if (!$article) {
-            return $row;
-        }
-
-        // Ensure content is never null or unset (catches ALL cases)
+        // Ensure content is never null (prevents TypeError)
         if (!isset($article['content']) || $article['content'] === null) {
             $article['content'] = '';
 
@@ -250,14 +244,8 @@ class Af_Enhance_Images extends Plugin {
                 ($article['title'] ?? 'unknown'), Debug::LOG_VERBOSE);
         }
 
-        // Put the modified article back into the wrapper
-        if ($is_headline) {
-            $row['headline'] = $article;
-        } else {
-            $row['article'] = $article;
-        }
-
-        return $row;
+        // Return unwrapped article (not the wrapper!)
+        return $article;
     }
 
     // =====================================================================
