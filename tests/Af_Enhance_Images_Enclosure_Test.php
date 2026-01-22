@@ -6,15 +6,15 @@ use PHPUnit\Framework\TestCase;
 use Af_Enhance_Images;
 
 /**
- * Test suite for Af_Enhance_Images v2.0 features
+ * Test suite for Af_Enhance_Images plugin - Enclosure Handling
  *
- * Tests verify new functionality:
+ * Tests verify enclosure-related functionality:
  * 1. Enclosure MIME type fixing
  * 2. Open Graph metadata extraction
- * 3. Enclosure URL upgrading (NEW feature for BBC Mundo)
+ * 3. Enclosure URL upgrading (BBC Mundo feature)
  * 4. Configuration handling
  */
-class Af_Enhance_Images_V2_Test extends TestCase {
+class Af_Enhance_Images_Enclosure_Test extends TestCase {
 
     private $plugin;
     private $mockHost;
@@ -474,5 +474,196 @@ class Af_Enhance_Images_V2_Test extends TestCase {
         // Check enclosure type fixing worked
         $this->assertEquals('image/jpeg', $result['enclosures'][0]->type,
             'Should fix enclosure MIME type');
+    }
+
+    /**
+     * ADDITIONAL EDGE CASE TESTS FOR ENCLOSURE TYPE FIXING
+     */
+
+    public function test_handles_url_without_extension() {
+        $enclosure = new \stdClass();
+        $enclosure->link = 'https://example.com/image';
+        $enclosure->type = '';
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'test',
+            'enclosures' => [$enclosure]
+        ];
+
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'fix_enclosure_type') return true;
+                if ($key === 'inline_enhancement') return false;
+                return $default;
+            });
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        // Without extension, defaults to jpeg
+        $this->assertEquals('image/jpeg', $result['enclosures'][0]->type,
+            'Should default to image/jpeg for URLs without extension');
+    }
+
+    public function test_handles_url_with_multiple_dots() {
+        $enclosure = new \stdClass();
+        $enclosure->link = 'https://example.com/file.backup.tar.gz';
+        $enclosure->type = '';
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'test',
+            'enclosures' => [$enclosure]
+        ];
+
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'fix_enclosure_type') return true;
+                if ($key === 'inline_enhancement') return false;
+                return $default;
+            });
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        // Should extract last extension (gz)
+        // Note: Plugin doesn't handle .gz, will default to jpeg
+        $this->assertNotEmpty($result['enclosures'][0]->type,
+            'Should set some type for file with multiple dots');
+    }
+
+    public function test_handles_url_with_fragment() {
+        $enclosure = new \stdClass();
+        $enclosure->link = 'https://example.com/image.jpg#section1';
+        $enclosure->type = '';
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'test',
+            'enclosures' => [$enclosure]
+        ];
+
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'fix_enclosure_type') return true;
+                if ($key === 'inline_enhancement') return false;
+                return $default;
+            });
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertEquals('image/jpeg', $result['enclosures'][0]->type,
+            'Should handle URLs with fragment identifiers');
+    }
+
+    public function test_handles_case_insensitive_extensions() {
+        $test_cases = [
+            ['url' => 'https://example.com/IMAGE.JPG', 'expected' => 'image/jpeg'],
+            ['url' => 'https://example.com/file.PNG', 'expected' => 'image/png'],
+            ['url' => 'https://example.com/image.WebP', 'expected' => 'image/webp'],
+        ];
+
+        foreach ($test_cases as $test) {
+            $enclosure = new \stdClass();
+            $enclosure->link = $test['url'];
+            $enclosure->type = '';
+
+            $article = [
+                'title' => 'Test',
+                'content' => 'test',
+                'enclosures' => [$enclosure]
+            ];
+
+            $this->mockHost->expects($this->any())
+                ->method('get')
+                ->willReturnCallback(function($plugin, $key, $default) {
+                    if ($key === 'fix_enclosure_type') return true;
+                    if ($key === 'inline_enhancement') return false;
+                    return $default;
+                });
+
+            $result = $this->plugin->hook_article_filter($article);
+
+            $this->assertEquals($test['expected'], $result['enclosures'][0]->type,
+                "Should handle uppercase extension in {$test['url']}");
+        }
+    }
+
+    public function test_handles_url_with_encoded_characters() {
+        $enclosure = new \stdClass();
+        $enclosure->link = 'https://example.com/image%20with%20spaces.jpg';
+        $enclosure->type = '';
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'test',
+            'enclosures' => [$enclosure]
+        ];
+
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'fix_enclosure_type') return true;
+                if ($key === 'inline_enhancement') return false;
+                return $default;
+            });
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertEquals('image/jpeg', $result['enclosures'][0]->type,
+            'Should handle URL-encoded characters');
+    }
+
+    public function test_handles_data_url() {
+        $enclosure = new \stdClass();
+        $enclosure->link = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA';
+        $enclosure->type = '';
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'test',
+            'enclosures' => [$enclosure]
+        ];
+
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'fix_enclosure_type') return true;
+                if ($key === 'inline_enhancement') return false;
+                return $default;
+            });
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        // Data URLs should have MIME type extracted from data URL itself
+        $this->assertEquals('image/png', $result['enclosures'][0]->type,
+            'Should extract MIME type from data URL');
+    }
+
+    public function test_preserves_type_for_non_empty_types() {
+        $enclosure = new \stdClass();
+        $enclosure->link = 'https://example.com/image.jpg';
+        $enclosure->type = 'image/custom';
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'test',
+            'enclosures' => [$enclosure]
+        ];
+
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'fix_enclosure_type') return true;
+                if ($key === 'inline_enhancement') return false;
+                return $default;
+            });
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertEquals('image/custom', $result['enclosures'][0]->type,
+            'Should preserve non-empty MIME types');
     }
 }

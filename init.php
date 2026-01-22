@@ -42,6 +42,7 @@ class Af_Enhance_Images extends Plugin {
     public function init($host) {
         $this->host = $host;
         $host->add_hook($host::HOOK_ARTICLE_FILTER, $this);
+        $host->add_hook($host::HOOK_RENDER_ARTICLE_API, $this);
         $host->add_hook($host::HOOK_PREFS_TAB, $this);
     }
 
@@ -227,6 +228,38 @@ class Af_Enhance_Images extends Plugin {
         return $article;
     }
 
+    /**
+     * Hook: Ensure content is never null before API response processing
+     * This prevents TypeError in DiskCache::rewrite_urls()
+     */
+    public function hook_render_article_api($row) {
+        // Extract the article/headline from the wrapper
+        $is_headline = isset($row['headline']);
+        $article = $is_headline ? $row['headline'] : ($row['article'] ?? null);
+
+        // Early exit if no article data
+        if (!$article) {
+            return $row;
+        }
+
+        // Ensure content is never null or unset (catches ALL cases)
+        if (!isset($article['content']) || $article['content'] === null) {
+            $article['content'] = '';
+
+            Debug::log("af_enhance_images: Fixed null/missing content for article: " .
+                ($article['title'] ?? 'unknown'), Debug::LOG_VERBOSE);
+        }
+
+        // Put the modified article back into the wrapper
+        if ($is_headline) {
+            $row['headline'] = $article;
+        } else {
+            $row['article'] = $article;
+        }
+
+        return $row;
+    }
+
     // =====================================================================
     // FEATURE 1: INLINE IMAGE ENHANCEMENT
     // =====================================================================
@@ -281,12 +314,20 @@ class Af_Enhance_Images extends Plugin {
             $highest_res_url = $this->extract_highest_res_from_srcset($srcset);
 
             if ($highest_res_url) {
-                $img_tag = preg_replace(
-                    '/(\s)src\s*=\s*["\'][^"\']*["\']/i',
-                    '$1src="' . htmlspecialchars($highest_res_url, ENT_QUOTES) . '"',
-                    $img_tag
-                );
-                $modifications[] = 'srcset->src';
+                // Check if src attribute exists
+                if (preg_match('/\ssrc\s*=/i', $img_tag)) {
+                    // Rewrite existing src
+                    $img_tag = preg_replace(
+                        '/(\s)src\s*=\s*["\'][^"\']*["\']/i',
+                        '$1src="' . htmlspecialchars($highest_res_url, ENT_QUOTES) . '"',
+                        $img_tag
+                    );
+                    $modifications[] = 'srcset->src';
+                } else {
+                    // Add src attribute from srcset (improves browser compatibility)
+                    $img_tag = str_replace('<img', '<img src="' . htmlspecialchars($highest_res_url, ENT_QUOTES) . '"', $img_tag);
+                    $modifications[] = 'added src from srcset';
+                }
             }
         }
 
@@ -492,7 +533,9 @@ class Af_Enhance_Images extends Plugin {
             }
         }
 
-        if (empty($og_data['image']) && empty($og_data['description']) && empty($og_data['author'])) {
+        // Return null only if we found absolutely nothing useful
+        // Tags can be useful even without image/description/author
+        if (empty($og_data['image']) && empty($og_data['description']) && empty($og_data['author']) && empty($og_data['tags'])) {
             return null;
         }
 
@@ -690,6 +733,10 @@ class Af_Enhance_Images extends Plugin {
         // - /ws/240/path/to/image.jpg vs /ws/1024/path/to/image.jpg (BBC)
         // - /resize/240x/path/to/image.jpg vs /resize/1024x/path/to/image.jpg
         // - /image.jpg?width=240 vs /image.jpg?width=1024
+        // - image-300x200.jpg vs image-1024x768.jpg (WordPress)
+        // - image-medium.jpg vs image-large.jpg (WordPress)
+        // - image-scaled.jpg vs image.jpg (WordPress)
+        // - image_thumb.jpg vs image_large.jpg (common CMS)
 
         $path1 = parse_url($url1, PHP_URL_PATH);
         $path2 = parse_url($url2, PHP_URL_PATH);
@@ -698,13 +745,29 @@ class Af_Enhance_Images extends Plugin {
             return false;
         }
 
-        // Remove size parameters from paths
+        // Remove size parameters from paths (BBC style /ws/240/)
         $normalized1 = preg_replace('/\/\d+[wx]?\//i', '/', $path1);
         $normalized2 = preg_replace('/\/\d+[wx]?\//i', '/', $path2);
 
-        // Also handle _w240.jpg vs _w1024.jpg patterns
+        // Handle _w240.jpg vs _w1024.jpg patterns
         $normalized1 = preg_replace('/_w\d+\./i', '.', $normalized1);
         $normalized2 = preg_replace('/_w\d+\./i', '.', $normalized2);
+
+        // Handle WordPress dimension suffixes: -300x200.jpg, -1024x768.jpg
+        $normalized1 = preg_replace('/-\d+x\d+(?=\.[^.]+$)/i', '', $normalized1);
+        $normalized2 = preg_replace('/-\d+x\d+(?=\.[^.]+$)/i', '', $normalized2);
+
+        // Handle WordPress size names: -thumbnail, -medium, -large, -scaled
+        $normalized1 = preg_replace('/-(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full)(?=\.[^.]+$)/i', '', $normalized1);
+        $normalized2 = preg_replace('/-(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full)(?=\.[^.]+$)/i', '', $normalized2);
+
+        // Handle underscore variants: _thumb, _small, _large
+        $normalized1 = preg_replace('/_(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full)(?=\.[^.]+$)/i', '', $normalized1);
+        $normalized2 = preg_replace('/_(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full)(?=\.[^.]+$)/i', '', $normalized2);
+
+        // Handle numeric suffixes: -1.jpg, -2.jpg
+        $normalized1 = preg_replace('/-\d+(?=\.[^.]+$)/i', '', $normalized1);
+        $normalized2 = preg_replace('/-\d+(?=\.[^.]+$)/i', '', $normalized2);
 
         return $normalized1 === $normalized2;
     }
@@ -734,6 +797,14 @@ class Af_Enhance_Images extends Plugin {
     }
 
     private function infer_mime_type($url) {
+        // Handle data URLs: data:image/png;base64,...
+        if (strpos($url, 'data:') === 0) {
+            if (preg_match('/^data:([^;,]+)/', $url, $match)) {
+                return $match[1];
+            }
+            return 'image/jpeg';
+        }
+
         $path = parse_url($url, PHP_URL_PATH);
         if (!$path) {
             return 'image/jpeg';

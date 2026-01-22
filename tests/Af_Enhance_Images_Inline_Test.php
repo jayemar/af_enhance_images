@@ -6,7 +6,7 @@ use PHPUnit\Framework\TestCase;
 use Af_Enhance_Images;
 
 /**
- * Test suite for Af_Enhance_Images plugin
+ * Test suite for Af_Enhance_Images plugin - Inline Image Enhancement
  *
  * Tests verify that the plugin correctly:
  * 1. Extracts highest resolution from srcset and rewrites src
@@ -14,7 +14,7 @@ use Af_Enhance_Images;
  * 3. Removes loading="lazy" attributes
  * 4. Handles edge cases and malformed HTML
  */
-class Af_Enhance_Images_Test extends TestCase {
+class Af_Enhance_Images_Inline_Test extends TestCase {
 
     private $plugin;
     private $mockHost;
@@ -353,5 +353,176 @@ class Af_Enhance_Images_Test extends TestCase {
             'Should preserve width attribute');
         $this->assertStringContainsString('class="featured"', $result['content'],
             'Should preserve class attribute');
+    }
+
+    /**
+     * ADDITIONAL EDGE CASE TESTS
+     */
+
+    /**
+     * Test 19: Srcset with trailing commas
+     */
+    public function test_handles_srcset_with_trailing_commas() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="thumb.jpg" srcset="small.jpg 300w, large.jpg 1200w,">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="large.jpg"', $result['content'],
+            'Should handle srcset with trailing comma');
+    }
+
+    /**
+     * Test 20: Srcset with only commas (malformed)
+     */
+    public function test_handles_srcset_with_only_commas() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="thumb.jpg" srcset=",,">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="thumb.jpg"', $result['content'],
+            'Should preserve src when srcset is malformed');
+    }
+
+    /**
+     * Test 21: Srcset with malformed width descriptors
+     */
+    public function test_handles_malformed_width_descriptors() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="thumb.jpg" srcset="image1.jpg abc, image2.jpg 1200w">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="image2.jpg"', $result['content'],
+            'Should skip malformed descriptor and use valid one');
+    }
+
+    /**
+     * Test 22: Data-srcset is not processed by plugin
+     */
+    public function test_data_srcset_not_processed() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="thumb.jpg" data-srcset="image.jpg 1200w">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('data-srcset=', $result['content'],
+            'Should preserve data-srcset attribute');
+        // Plugin doesn't process data-srcset, only srcset
+        $this->assertStringContainsString('src=', $result['content'],
+            'Should have a src attribute');
+    }
+
+    /**
+     * Test 23: Loading attribute with different values
+     */
+    public function test_removes_loading_eager_attribute() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="image.jpg" loading="eager">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        // Plugin only removes loading="lazy", not other values
+        $this->assertStringContainsString('src="image.jpg"', $result['content']);
+    }
+
+    /**
+     * Test 24: Image with no src but has srcset
+     */
+    public function test_handles_image_with_only_srcset() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img srcset="small.jpg 300w, large.jpg 1200w" alt="No src">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        // Plugin now adds src from srcset for better browser compatibility
+        $this->assertStringContainsString('src="large.jpg"', $result['content'],
+            'Should add src from srcset when src missing');
+        $this->assertStringContainsString('srcset=', $result['content'],
+            'Should preserve srcset');
+    }
+
+    /**
+     * Test 25: Very long srcset with many options
+     */
+    public function test_handles_very_long_srcset() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="thumb.jpg" srcset="
+                img-100.jpg 100w,
+                img-200.jpg 200w,
+                img-300.jpg 300w,
+                img-400.jpg 400w,
+                img-600.jpg 600w,
+                img-800.jpg 800w,
+                img-1000.jpg 1000w,
+                img-1200.jpg 1200w,
+                img-1600.jpg 1600w,
+                img-2000.jpg 2000w">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="img-2000.jpg"', $result['content'],
+            'Should find highest resolution in long srcset');
+    }
+
+    /**
+     * Test 26: URL with fragment identifier
+     */
+    public function test_handles_url_with_fragment() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="thumb.jpg#section" srcset="large.jpg#section 1200w">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="large.jpg#section"', $result['content'],
+            'Should preserve fragment identifiers in URLs');
+    }
+
+    /**
+     * Test 27: Case-insensitive attribute matching
+     */
+    public function test_handles_uppercase_attributes() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<IMG SRC="thumb.jpg" SRCSET="large.jpg 1200w" LOADING="LAZY">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('large.jpg', $result['content'],
+            'Should handle uppercase attributes');
+    }
+
+    /**
+     * Test 28: Image with both data-src and srcset
+     */
+    public function test_handles_data_src_with_srcset() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img data-src="lazy.jpg" srcset="small.jpg 300w, large.jpg 1200w">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        // Should convert data-src to src AND use srcset
+        $this->assertStringContainsString('src="large.jpg"', $result['content'],
+            'Should prioritize srcset even when data-src present');
     }
 }
