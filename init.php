@@ -200,6 +200,8 @@ class Af_Enhance_Images extends Plugin {
         // Fetch if enclosure upgrading enabled and article has enclosures
         if ($upgrade_enclosures && !empty($article['enclosures'])) {
             $should_fetch = true;
+            Debug::log("af_enhance_images: Will fetch page for enclosure upgrading (count: " .
+                count($article['enclosures']) . ")", Debug::LOG_VERBOSE);
         }
 
         if ($should_fetch) {
@@ -233,8 +235,9 @@ class Af_Enhance_Images extends Plugin {
      * This prevents TypeError in DiskCache::rewrite_urls()
      */
     public function hook_render_article_api($row) {
-        // Extract article from wrapper
-        $article = isset($row['headline']) ? $row['headline'] : $row['article'];
+        // Detect wrapper structure
+        $is_headline = isset($row['headline']);
+        $article = $is_headline ? $row['headline'] : ($row['article'] ?? $row);
 
         // Ensure content is never null (prevents TypeError)
         if (!isset($article['content']) || $article['content'] === null) {
@@ -244,8 +247,16 @@ class Af_Enhance_Images extends Plugin {
                 ($article['title'] ?? 'unknown'), Debug::LOG_VERBOSE);
         }
 
-        // Return unwrapped article (not the wrapper!)
-        return $article;
+        // Return with proper wrapper structure preserved
+        if ($is_headline) {
+            $row['headline'] = $article;
+            return $row;
+        } elseif (isset($row['article'])) {
+            $row['article'] = $article;
+            return $row;
+        } else {
+            return $article;
+        }
     }
 
     // =====================================================================
@@ -304,16 +315,16 @@ class Af_Enhance_Images extends Plugin {
             if ($highest_res_url) {
                 // Check if src attribute exists
                 if (preg_match('/\ssrc\s*=/i', $img_tag)) {
-                    // Rewrite existing src
+                    // Rewrite existing src (URL already HTML-encoded, don't double-encode)
                     $img_tag = preg_replace(
                         '/(\s)src\s*=\s*["\'][^"\']*["\']/i',
-                        '$1src="' . htmlspecialchars($highest_res_url, ENT_QUOTES) . '"',
+                        '$1src="' . $highest_res_url . '"',
                         $img_tag
                     );
                     $modifications[] = 'srcset->src';
                 } else {
                     // Add src attribute from srcset (improves browser compatibility)
-                    $img_tag = str_replace('<img', '<img src="' . htmlspecialchars($highest_res_url, ENT_QUOTES) . '"', $img_tag);
+                    $img_tag = str_replace('<img', '<img src="' . $highest_res_url . '"', $img_tag);
                     $modifications[] = 'added src from srcset';
                 }
             }
@@ -404,14 +415,18 @@ class Af_Enhance_Images extends Plugin {
             'url' => $url,
             'timeout' => 10,
             'followlocation' => true,
+            'useragent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         ];
 
         $response = UrlHelper::fetch($options);
 
         if (!$response) {
-            Debug::log("af_enhance_images: Failed to fetch: $url", Debug::LOG_VERBOSE);
+            Debug::log("af_enhance_images: Failed to fetch: $url (may be blocked by site)", Debug::LOG_VERBOSE);
             return null;
         }
+
+        $content_length = strlen($response);
+        Debug::log("af_enhance_images: Successfully fetched $content_length bytes from: $url", Debug::LOG_VERBOSE);
 
         return $response;
     }
