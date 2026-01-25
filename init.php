@@ -235,9 +235,8 @@ class Af_Enhance_Images extends Plugin {
      * This prevents TypeError in DiskCache::rewrite_urls()
      */
     public function hook_render_article_api($row) {
-        // Detect wrapper structure
-        $is_headline = isset($row['headline']);
-        $article = $is_headline ? $row['headline'] : ($row['article'] ?? $row);
+        // Extract article from wrapper (may be 'headline', 'article', or unwrapped)
+        $article = $row['headline'] ?? $row['article'] ?? $row;
 
         // Ensure content is never null (prevents TypeError)
         if (!isset($article['content']) || $article['content'] === null) {
@@ -247,16 +246,8 @@ class Af_Enhance_Images extends Plugin {
                 ($article['title'] ?? 'unknown'), Debug::LOG_VERBOSE);
         }
 
-        // Return with proper wrapper structure preserved
-        if ($is_headline) {
-            $row['headline'] = $article;
-            return $row;
-        } elseif (isset($row['article'])) {
-            $row['article'] = $article;
-            return $row;
-        } else {
-            return $article;
-        }
+        // Always return unwrapped article (callback will handle it)
+        return $article;
     }
 
     // =====================================================================
@@ -566,6 +557,8 @@ class Af_Enhance_Images extends Plugin {
                 $enclosure->type = $this->infer_mime_type($og_data['image']);
                 $enclosure->length = 0;
                 $enclosure->title = $og_data['image_alt'] ?? 'Featured image';
+                $enclosure->width = $og_data['image_width'] ?? 0;
+                $enclosure->height = $og_data['image_height'] ?? 0;
 
                 if (!is_array($article['enclosures'])) {
                     $article['enclosures'] = [];
