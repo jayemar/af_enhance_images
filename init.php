@@ -211,17 +211,20 @@ class Af_Enhance_Images extends Plugin {
                 $html = $this->fetch_article_page($url);
 
                 if ($html) {
-                    // Extract OG metadata if enabled
-                    if ($extract_og) {
+                    // Extract OG metadata (needed for both og extraction and enclosure upgrading fallback)
+                    $og_data = null;
+                    if ($extract_og || $upgrade_enclosures) {
                         $og_data = $this->extract_og_metadata($html);
-                        if ($og_data) {
-                            $article = $this->apply_og_metadata($article, $og_data);
-                        }
+                    }
+
+                    // Apply OG metadata if extraction is enabled
+                    if ($extract_og && $og_data) {
+                        $article = $this->apply_og_metadata($article, $og_data);
                     }
 
                     // Upgrade enclosure URLs if enabled
                     if ($upgrade_enclosures && !empty($article['enclosures'])) {
-                        $article = $this->upgrade_enclosure_urls($article, $html);
+                        $article = $this->upgrade_enclosure_urls($article, $html, $og_data);
                     }
                 }
             }
@@ -325,6 +328,33 @@ class Af_Enhance_Images extends Plugin {
         if (preg_match('/\s+loading\s*=\s*["\']?lazy["\']?/i', $img_tag)) {
             $img_tag = preg_replace('/\s+loading\s*=\s*["\']?lazy["\']?/i', '', $img_tag);
             $modifications[] = 'removed loading=lazy';
+        }
+
+        // Step 4: Remove conflicting size attributes after extracting best resolution
+        // These attributes can cause RSS readers to use lower resolution images
+
+        // Remove srcset (already extracted best URL to src)
+        if (preg_match('/\s+srcset\s*=\s*["\'][^"\']*["\']/i', $img_tag)) {
+            $img_tag = preg_replace('/\s+srcset\s*=\s*["\'][^"\']*["\']/i', '', $img_tag);
+            $modifications[] = 'removed srcset';
+        }
+
+        // Remove sizes (no longer needed without srcset)
+        if (preg_match('/\s+sizes\s*=\s*["\'][^"\']*["\']/i', $img_tag)) {
+            $img_tag = preg_replace('/\s+sizes\s*=\s*["\'][^"\']*["\']/i', '', $img_tag);
+            $modifications[] = 'removed sizes';
+        }
+
+        // Remove width attribute (allows natural high-res display)
+        if (preg_match('/\s+width\s*=\s*["\'][^"\']*["\']/i', $img_tag)) {
+            $img_tag = preg_replace('/\s+width\s*=\s*["\'][^"\']*["\']/i', '', $img_tag);
+            $modifications[] = 'removed width';
+        }
+
+        // Remove height attribute (allows natural high-res display)
+        if (preg_match('/\s+height\s*=\s*["\'][^"\']*["\']/i', $img_tag)) {
+            $img_tag = preg_replace('/\s+height\s*=\s*["\'][^"\']*["\']/i', '', $img_tag);
+            $modifications[] = 'removed height';
         }
 
         return $img_tag;
@@ -600,7 +630,7 @@ class Af_Enhance_Images extends Plugin {
     // FEATURE 5: ENCLOSURE URL UPGRADING
     // =====================================================================
 
-    private function upgrade_enclosure_urls($article, $html) {
+    private function upgrade_enclosure_urls($article, $html, $og_data = null) {
         if (!isset($article['enclosures']) || empty($article['enclosures'])) {
             return $article;
         }
@@ -610,7 +640,6 @@ class Af_Enhance_Images extends Plugin {
 
         if (empty($page_images)) {
             Debug::log("af_enhance_images: No images with srcset found on article page", Debug::LOG_VERBOSE);
-            return $article;
         }
 
         $upgraded_count = 0;
@@ -628,8 +657,20 @@ class Af_Enhance_Images extends Plugin {
                 continue;
             }
 
+            $upgraded_url = null;
+
             // Try to match this enclosure to an image on the page
-            $upgraded_url = $this->match_and_upgrade_url($enclosure_url, $page_images);
+            if (!empty($page_images)) {
+                $upgraded_url = $this->match_and_upgrade_url($enclosure_url, $page_images);
+            }
+
+            // Fallback: Try og:image if srcset matching failed
+            if (!$upgraded_url && !empty($og_data['image'])) {
+                if ($this->is_same_image_different_size($enclosure_url, $og_data['image'])) {
+                    $upgraded_url = $og_data['image'];
+                    Debug::log("af_enhance_images: Using og:image as fallback for enclosure upgrade", Debug::LOG_VERBOSE);
+                }
+            }
 
             if ($upgraded_url && $upgraded_url !== $enclosure_url) {
                 Debug::log("af_enhance_images: Upgrading enclosure URL:\n  FROM: $enclosure_url\n  TO: $upgraded_url", Debug::LOG_VERBOSE);
@@ -689,6 +730,8 @@ class Af_Enhance_Images extends Plugin {
 
         // Extract filename from enclosure
         $enc_filename = basename($enc_path);
+        // Strip .webp suffix to handle image.png vs image.png.webp mismatches
+        $enc_filename = preg_replace('/\.webp$/i', '', $enc_filename);
         $enc_filename_noext = pathinfo($enc_filename, PATHINFO_FILENAME);
 
         foreach ($page_images as $img) {
@@ -702,6 +745,8 @@ class Af_Enhance_Images extends Plugin {
                 if (!$candidate_path) continue;
 
                 $candidate_filename = basename($candidate_path);
+                // Strip .webp suffix to handle image.png vs image.png.webp mismatches
+                $candidate_filename = preg_replace('/\.webp$/i', '', $candidate_filename);
                 $candidate_filename_noext = pathinfo($candidate_filename, PATHINFO_FILENAME);
 
                 // Match by filename (with or without extension)
@@ -739,6 +784,30 @@ class Af_Enhance_Images extends Plugin {
 
         if (!$path1 || !$path2) {
             return false;
+        }
+
+        // BBC-specific check: Compare last 2-3 path segments (directory/subdirectory/filename)
+        // Example: /ace/ws/240/cpsprodpb/7324/live/image.jpg vs /news/1024/branded_mundo/7324/live/image.jpg
+        // Both have 7324/live/image.jpg at the end
+        $segments1 = explode('/', trim($path1, '/'));
+        $segments2 = explode('/', trim($path2, '/'));
+
+        if (count($segments1) >= 3 && count($segments2) >= 3) {
+            // Get last 3 segments (directory/subdirectory/filename)
+            $tail1 = implode('/', array_slice($segments1, -3));
+            $tail2 = implode('/', array_slice($segments2, -3));
+
+            if ($tail1 === $tail2) {
+                return true;
+            }
+
+            // Also try last 2 segments (subdirectory/filename)
+            $tail1 = implode('/', array_slice($segments1, -2));
+            $tail2 = implode('/', array_slice($segments2, -2));
+
+            if ($tail1 === $tail2) {
+                return true;
+            }
         }
 
         // Remove size parameters from paths (BBC style /ws/240/)
