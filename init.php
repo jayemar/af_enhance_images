@@ -44,6 +44,9 @@ class Af_Enhance_Images extends Plugin {
         $host->add_hook($host::HOOK_ARTICLE_FILTER, $this);
         $host->add_hook($host::HOOK_RENDER_ARTICLE_API, $this);
         $host->add_hook($host::HOOK_PREFS_TAB, $this);
+
+        // Diagnostic: Confirm plugin initialization (non-verbose for visibility)
+        Debug::log("AF_ENHANCE_IMAGES: Plugin initialized successfully");
     }
 
     // =====================================================================
@@ -175,6 +178,10 @@ class Af_Enhance_Images extends Plugin {
     // =====================================================================
 
     public function hook_article_filter($article) {
+        // Diagnostic: Confirm hook is being called (non-verbose for visibility)
+        Debug::log("AF_ENHANCE_IMAGES: hook_article_filter() called for: " .
+            ($article['title'] ?? 'unknown'));
+
         // Feature 1: Enhance inline images
         if ($this->host->get($this, "inline_enhancement", true)) {
             $article = $this->enhance_inline_images($article);
@@ -200,8 +207,9 @@ class Af_Enhance_Images extends Plugin {
         // Fetch if enclosure upgrading enabled and article has enclosures
         if ($upgrade_enclosures && !empty($article['enclosures'])) {
             $should_fetch = true;
-            Debug::log("af_enhance_images: Will fetch page for enclosure upgrading (count: " .
-                count($article['enclosures']) . ")", Debug::LOG_VERBOSE);
+            // Diagnostic: Confirm enclosure upgrading decision (non-verbose for visibility)
+            Debug::log("AF_ENHANCE_IMAGES: Will attempt to upgrade " .
+                count($article['enclosures']) . " enclosure(s)");
         }
 
         if ($should_fetch) {
@@ -722,9 +730,13 @@ class Af_Enhance_Images extends Plugin {
     }
 
     private function match_and_upgrade_url($enclosure_url, $page_images) {
+        // Diagnostic: Log URL being matched (non-verbose for visibility)
+        Debug::log("AF_ENHANCE_IMAGES: Matching enclosure: " . $enclosure_url);
+
         // Normalize the enclosure URL for comparison
         $enc_path = parse_url($enclosure_url, PHP_URL_PATH);
         if (!$enc_path) {
+            Debug::log("AF_ENHANCE_IMAGES: No path found in enclosure URL");
             return null;
         }
 
@@ -754,17 +766,23 @@ class Af_Enhance_Images extends Plugin {
                     $candidate_filename_noext === $enc_filename_noext) {
 
                     // Return the highest res URL if available, otherwise src
-                    return $img['highest_res'] ?: $img['src'];
+                    $upgraded = $img['highest_res'] ?: $img['src'];
+                    Debug::log("AF_ENHANCE_IMAGES: Found upgrade (filename match): " . $upgraded);
+                    return $upgraded;
                 }
 
                 // Also check if the enclosure URL is a substring match (for CDN URLs with size parameters)
                 // For example: /ws/240/image.jpg should match /ws/1024/image.jpg
                 if ($this->is_same_image_different_size($enclosure_url, $candidate_url)) {
-                    return $img['highest_res'] ?: $img['src'];
+                    $upgraded = $img['highest_res'] ?: $img['src'];
+                    Debug::log("AF_ENHANCE_IMAGES: Found upgrade (same image, different size): " . $upgraded);
+                    return $upgraded;
                 }
             }
         }
 
+        // Diagnostic: No match found (non-verbose for visibility)
+        Debug::log("AF_ENHANCE_IMAGES: No upgrade found for: " . $enclosure_url);
         return null;
     }
 
@@ -822,13 +840,13 @@ class Af_Enhance_Images extends Plugin {
         $normalized1 = preg_replace('/-\d+x\d+(?=\.[^.]+$)/i', '', $normalized1);
         $normalized2 = preg_replace('/-\d+x\d+(?=\.[^.]+$)/i', '', $normalized2);
 
-        // Handle WordPress size names: -thumbnail, -medium, -large, -scaled
-        $normalized1 = preg_replace('/-(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full)(?=\.[^.]+$)/i', '', $normalized1);
-        $normalized2 = preg_replace('/-(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full)(?=\.[^.]+$)/i', '', $normalized2);
+        // Handle WordPress size names: -thumbnail, -medium, -large, -scaled, -default, -lede
+        $normalized1 = preg_replace('/-(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full|default|lede)(?=\.[^.]+$)/i', '', $normalized1);
+        $normalized2 = preg_replace('/-(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full|default|lede)(?=\.[^.]+$)/i', '', $normalized2);
 
-        // Handle underscore variants: _thumb, _small, _large
-        $normalized1 = preg_replace('/_(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full)(?=\.[^.]+$)/i', '', $normalized1);
-        $normalized2 = preg_replace('/_(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full)(?=\.[^.]+$)/i', '', $normalized2);
+        // Handle underscore variants: _thumb, _small, _large, _default, _lede
+        $normalized1 = preg_replace('/_(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full|default|lede)(?=\.[^.]+$)/i', '', $normalized1);
+        $normalized2 = preg_replace('/_(?:thumbnail|thumb|small|medium|large|xlarge|xxlarge|scaled|full|default|lede)(?=\.[^.]+$)/i', '', $normalized2);
 
         // Handle numeric suffixes: -1.jpg, -2.jpg
         $normalized1 = preg_replace('/-\d+(?=\.[^.]+$)/i', '', $normalized1);
