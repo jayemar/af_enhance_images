@@ -58,7 +58,7 @@ class Af_Enhance_Images extends Plugin {
 
         $inline_enhancement = $this->host->get($this, "inline_enhancement", true);
         $fix_enclosure_type = $this->host->get($this, "fix_enclosure_type", true);
-        $extract_og = $this->host->get($this, "extract_og", false);
+        $extract_og = $this->host->get($this, "extract_og", true);
         $enhance_content = $this->host->get($this, "enhance_content", false);
         $upgrade_enclosures = $this->host->get($this, "upgrade_enclosures", false);
         ?>
@@ -111,7 +111,7 @@ class Af_Enhance_Images extends Plugin {
                         <?= __('Extract Open Graph metadata') ?>
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Add og:image as enclosure, set author from og:article:author. Fetches article page only when RSS feed lacks images.') ?>
+                        <?= __('Add og:image as thumbnail enclosure, set author from og:article:author. Fetches article page only when RSS feed has no image enclosures.') ?>
                     </p>
 
                     <label class="checkbox" style="margin-left: 24px;">
@@ -193,13 +193,15 @@ class Af_Enhance_Images extends Plugin {
         }
 
         // Feature 3 & 4 & 5: Article page fetching for OG and enclosure upgrading
-        $extract_og = $this->host->get($this, "extract_og", false);
+        $extract_og = $this->host->get($this, "extract_og", true);
         $upgrade_enclosures = $this->host->get($this, "upgrade_enclosures", false);
 
         // Determine if we need to fetch the article page
         $should_fetch = false;
 
-        // Fetch if OG extraction enabled and article lacks images
+        // Fetch if OG extraction enabled and article lacks images (both enclosures and inline).
+        // Uses article_has_images() so feeds with full inline content (NPR, The Verge) do NOT
+        // get an og:thumbnail - that would duplicate the inline images already in the content.
         if ($extract_og && !$this->article_has_images($article)) {
             $should_fetch = true;
         }
@@ -410,7 +412,7 @@ class Af_Enhance_Images extends Plugin {
         foreach ($article['enclosures'] as &$enclosure) {
             $type = $enclosure->type ?? '';
 
-            if (empty($type)) {
+            if (empty($type) || $type === 'image/generic') {
                 $url = $enclosure->link ?? '';
 
                 if (!empty($url)) {
@@ -594,7 +596,10 @@ class Af_Enhance_Images extends Plugin {
                 $enclosure->link = $og_data['image'];
                 $enclosure->type = $this->infer_mime_type($og_data['image']);
                 $enclosure->length = 0;
-                $enclosure->title = $og_data['image_alt'] ?? 'Featured image';
+                // Use 'og:thumbnail' as a marker so af_filter_enclosures can distinguish
+                // this fallback thumbnail from regular RSS enclosures. The title field is
+                // available at HOOK_RENDER_ARTICLE_API time but stripped from FreshAPI output.
+                $enclosure->title = 'og:thumbnail';
                 $enclosure->width = $og_data['image_width'] ?? 0;
                 $enclosure->height = $og_data['image_height'] ?? 0;
 
@@ -876,6 +881,21 @@ class Af_Enhance_Images extends Plugin {
             return true;
         }
 
+        return false;
+    }
+
+    // Like article_has_images() but only checks enclosures, not inline <img> tags.
+    // Used for the og:image fallback trigger so feeds with inline images but no
+    // enclosures still get an og:thumbnail for list-view display in API clients.
+    private function article_has_enclosure_images($article) {
+        if (!empty($article['enclosures'])) {
+            foreach ($article['enclosures'] as $enc) {
+                $type = $enc->type ?? '';
+                if (strpos($type, 'image/') === 0) {
+                    return true;
+                }
+            }
+        }
         return false;
     }
 

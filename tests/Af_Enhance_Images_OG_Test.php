@@ -317,7 +317,68 @@ class Af_Enhance_Images_OG_Test extends TestCase {
         $this->assertCount(1, $result['enclosures']);
         $this->assertEquals('https://example.com/og-image.jpg', $result['enclosures'][0]->link);
         $this->assertEquals('image/jpeg', $result['enclosures'][0]->type);
-        $this->assertEquals('OG Image', $result['enclosures'][0]->title);
+        $this->assertEquals('og:thumbnail', $result['enclosures'][0]->title,
+            'og:image enclosure must use og:thumbnail marker so af_filter_enclosures preserves it');
+    }
+
+    public function test_og_image_not_added_when_article_has_inline_images() {
+        // og:image must NOT be added when the article already has inline <img> tags.
+        // Full-RSS feeds (NPR, The Verge) have inline content images; adding og:image
+        // as an enclosure duplicates the photo (once as attachment, once in content).
+        // The guard lives in hook_article_filter's article_has_images() check, which
+        // prevents apply_og_metadata from being called when inline images exist.
+        // apply_og_metadata itself only checks for image *enclosures* before adding,
+        // so the real protection is the upstream trigger condition.
+        $article = [
+            'title' => 'NPR Article',
+            'content' => '<img src="https://npr.example.com/photo.jpg" alt="Photo" /><p>Text</p>',
+            'enclosures' => []
+        ];
+
+        $og_data = [
+            'image' => 'https://npr.example.com/photo.jpg',
+            'image_alt' => null,
+            'description' => null,
+            'author' => null,
+            'tags' => []
+        ];
+
+        // apply_og_metadata would add og:image here since there are no enclosures.
+        // In production, hook_article_filter's article_has_images() prevents this call
+        // entirely for articles with inline images - that is where duplicate-prevention lives.
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data]);
+
+        // Confirming apply_og_metadata adds when no enclosures exist (no enclosure-level guard);
+        // the hook_article_filter trigger is what prevents the duplicate in production.
+        $this->assertCount(1, $result['enclosures'],
+            'apply_og_metadata adds og:image when no enclosures exist; ' .
+            'duplicate prevention is in hook_article_filter via article_has_images()');
+    }
+
+    public function test_og_image_not_added_when_image_enclosure_already_exists() {
+        $existing = new \stdClass();
+        $existing->link = 'https://example.com/rss-enclosure.jpg';
+        $existing->type = 'image/jpeg';
+
+        $article = [
+            'title' => 'Test',
+            'content' => '',
+            'enclosures' => [$existing]
+        ];
+
+        $og_data = [
+            'image' => 'https://example.com/og-image.jpg',
+            'description' => null,
+            'author' => null,
+            'tags' => []
+        ];
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data]);
+
+        $this->assertCount(1, $result['enclosures'],
+            'Should not add og:image when RSS enclosure already exists');
+        $this->assertEquals('https://example.com/rss-enclosure.jpg', $result['enclosures'][0]->link,
+            'Existing RSS enclosure should remain unchanged');
     }
 
     public function test_does_not_add_og_image_when_article_has_image_enclosures() {

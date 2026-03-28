@@ -97,6 +97,58 @@ class Af_Enhance_Images_Enclosure_Test extends TestCase {
             'Should set MIME type to image/png for .png files');
     }
 
+    public function test_fixes_image_generic_mime_type_for_jpg_url() {
+        // BBC Mundo RSS feeds set content_type to 'image/generic', not empty string.
+        // The plugin must treat 'image/generic' as a bad value and infer from the URL.
+        $enclosure = new \stdClass();
+        $enclosure->link = 'https://ichef.bbci.co.uk/ace/ws/800/cpsprodpb/image.jpg.webp';
+        $enclosure->type = 'image/generic';
+
+        $article = [
+            'title' => 'BBC Mundo Article',
+            'content' => 'test',
+            'enclosures' => [$enclosure]
+        ];
+
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'fix_enclosure_type') return true;
+                if ($key === 'inline_enhancement') return false;
+                return $default;
+            });
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertEquals('image/webp', $result['enclosures'][0]->type,
+            'Should fix image/generic to proper MIME type inferred from URL extension');
+    }
+
+    public function test_fixes_image_generic_mime_type_for_plain_jpg() {
+        $enclosure = new \stdClass();
+        $enclosure->link = 'https://ichef.bbci.co.uk/news/1024/branded_mundo/image.jpg';
+        $enclosure->type = 'image/generic';
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'test',
+            'enclosures' => [$enclosure]
+        ];
+
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'fix_enclosure_type') return true;
+                if ($key === 'inline_enhancement') return false;
+                return $default;
+            });
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertEquals('image/jpeg', $result['enclosures'][0]->type,
+            'Should fix image/generic to image/jpeg for .jpg URL');
+    }
+
     public function test_preserves_existing_mime_type() {
         $enclosure = new \stdClass();
         $enclosure->link = 'https://example.com/image.jpg';
