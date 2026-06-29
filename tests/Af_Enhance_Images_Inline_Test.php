@@ -405,9 +405,9 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
     }
 
     /**
-     * Test 22: Data-srcset is not processed by plugin
+     * Test 22: Data-srcset is normalized to srcset and highest resolution extracted
      */
-    public function test_data_srcset_not_processed() {
+    public function test_data_srcset_normalized_to_srcset() {
         $article = [
             'title' => 'Test Article',
             'content' => '<img src="thumb.jpg" data-srcset="image.jpg 1200w">'
@@ -415,11 +415,48 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
 
         $result = $this->plugin->hook_article_filter($article);
 
-        $this->assertStringContainsString('data-srcset=', $result['content'],
-            'Should preserve data-srcset attribute');
-        // Plugin doesn't process data-srcset, only srcset
-        $this->assertStringContainsString('src=', $result['content'],
-            'Should have a src attribute');
+        $this->assertStringNotContainsString('data-srcset=', $result['content'],
+            'Should convert data-srcset to srcset');
+        $this->assertStringContainsString('src="image.jpg"', $result['content'],
+            'Should extract highest resolution from data-srcset');
+    }
+
+    /**
+     * Test 29: Data URI placeholder src + data-src (Shopify lazy loading pattern)
+     */
+    public function test_replaces_data_uri_placeholder_src_with_data_src() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" data-src="https://cdn.shopify.com/comic.png" class="lazyload">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="https://cdn.shopify.com/comic.png"', $result['content'],
+            'Should replace data URI placeholder with real URL from data-src');
+        $this->assertStringNotContainsString('data:image/gif', $result['content'],
+            'Should remove the data URI placeholder');
+        $this->assertStringNotContainsString('data-src=', $result['content'],
+            'Should remove data-src after promotion');
+    }
+
+    /**
+     * Test 30: Data URI placeholder src + data-srcset (Shopify responsive lazy loading)
+     */
+    public function test_replaces_data_uri_placeholder_with_best_from_data_srcset() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" data-src="https://cdn.shopify.com/comic.png?width=360" data-srcset="https://cdn.shopify.com/comic.png?width=360 360w, https://cdn.shopify.com/comic.png?width=1100 1100w" class="lazyload">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="https://cdn.shopify.com/comic.png?width=1100"', $result['content'],
+            'Should use highest resolution from data-srcset');
+        $this->assertStringNotContainsString('data:image/gif', $result['content'],
+            'Should remove the data URI placeholder');
+        $this->assertStringNotContainsString('data-srcset=', $result['content'],
+            'Should remove data-srcset after normalization');
     }
 
     /**

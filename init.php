@@ -298,9 +298,13 @@ class Af_Enhance_Images extends Plugin {
     private function enhance_img_tag($img_tag, &$modifications) {
         $original = $img_tag;
 
-        // Step 1: Handle lazy loading - convert data-src to src
+        // Step 1: Handle lazy loading - convert data-src to src.
+        // Treat a data: URI as "no real src" since it's a placeholder (e.g. 1px transparent GIF).
         if (preg_match('/data-src\s*=\s*["\']([^"\']+)["\']/i', $img_tag, $data_src_match)) {
-            if (!preg_match('/\ssrc\s*=\s*["\'][^"\']+["\']/i', $img_tag)) {
+            $has_real_src = preg_match('/\ssrc\s*=\s*["\'][^"\']+["\']/i', $img_tag) &&
+                            !preg_match('/\ssrc\s*=\s*["\']data:[^"\']*["\']/i', $img_tag);
+            if (!$has_real_src) {
+                $img_tag = preg_replace('/\s+src\s*=\s*["\'][^"\']*["\']/i', '', $img_tag);
                 $img_tag = preg_replace(
                     '/data-src\s*=/i',
                     'src=',
@@ -309,6 +313,12 @@ class Af_Enhance_Images extends Plugin {
                 );
                 $modifications[] = 'data-src->src';
             }
+        }
+
+        // Normalize data-srcset to srcset so Step 2 can extract the highest resolution.
+        if (preg_match('/data-srcset\s*=\s*["\']([^"\']+)["\']/i', $img_tag)) {
+            $img_tag = preg_replace('/data-srcset\s*=/i', 'srcset=', $img_tag, 1);
+            $modifications[] = 'data-srcset->srcset';
         }
 
         // Step 2: Rewrite src to use highest resolution from srcset
