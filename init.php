@@ -57,6 +57,7 @@ class Af_Enhance_Images extends Plugin {
         if ($args != "prefFeeds") return;
 
         $inline_enhancement = $this->host->get($this, "inline_enhancement", true);
+        $strip_tracking_pixels = $this->host->get($this, "strip_tracking_pixels", true);
         $fix_enclosure_type = $this->host->get($this, "fix_enclosure_type", true);
         $extract_og = $this->host->get($this, "extract_og", true);
         $enhance_content = $this->host->get($this, "enhance_content", false);
@@ -88,6 +89,18 @@ class Af_Enhance_Images extends Plugin {
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
                         <?= __('Extract highest resolution from srcset, convert data-src to src, remove loading=lazy') ?>
+                    </p>
+                </fieldset>
+
+                <fieldset>
+                    <legend><?= __('Tracking Pixel Removal') ?></legend>
+                    <label class="checkbox">
+                        <input dojoType="dijit.form.CheckBox" type="checkbox" name="strip_tracking_pixels" value="1"
+                            <?= $strip_tracking_pixels ? 'checked' : '' ?>>
+                        <?= __('Strip tracking pixels from article content') ?>
+                    </label>
+                    <p class="help-text" style="margin-left: 24px; color: #666;">
+                        <?= __('Removes invisible images declared 2px or smaller in both width and height, commonly used to detect when an article was opened') ?>
                     </p>
                 </fieldset>
 
@@ -142,6 +155,7 @@ class Af_Enhance_Images extends Plugin {
             <h3><?= __('Feature Summary') ?></h3>
             <ul>
                 <li><strong>Inline Enhancement:</strong> <?= __('Processes <img> tags in article content') ?></li>
+                <li><strong>Tracking Pixel Removal:</strong> <?= __('Removes invisible beacon images used for open-tracking') ?></li>
                 <li><strong>Type Fixing:</strong> <?= __('Fixes empty MIME types in enclosures') ?></li>
                 <li><strong>OG Extraction:</strong> <?= __('Extracts og:image, author, description from article pages') ?></li>
                 <li><strong>Enclosure Upgrading:</strong> <?= __('Replaces low-res enclosure URLs with high-res from article srcset') ?></li>
@@ -157,6 +171,9 @@ class Af_Enhance_Images extends Plugin {
     public function save() {
         $inline_enhancement = ($_POST['inline_enhancement'] ?? '') === '1';
         $this->host->set($this, "inline_enhancement", $inline_enhancement);
+
+        $strip_tracking_pixels = ($_POST['strip_tracking_pixels'] ?? '') === '1';
+        $this->host->set($this, "strip_tracking_pixels", $strip_tracking_pixels);
 
         $fix_enclosure_type = ($_POST['fix_enclosure_type'] ?? '') === '1';
         $this->host->set($this, "fix_enclosure_type", $fix_enclosure_type);
@@ -182,6 +199,14 @@ class Af_Enhance_Images extends Plugin {
         Debug::log("AF_ENHANCE_IMAGES: hook_article_filter() called for: " .
             ($article['title'] ?? 'unknown'));
 
+        // Captured before Feature 1 runs: enhance_inline_images() unconditionally
+        // strips width/height attributes from every surviving <img> ("allows
+        // natural high-res display"), which would erase the size evidence
+        // article_has_images() needs to distinguish icon-sized share buttons
+        // from real content images. The has-images decision below is made
+        // against this pristine copy instead of the post-enhancement content.
+        $original_content = $article['content'] ?? '';
+
         // Feature 1: Enhance inline images
         if ($this->host->get($this, "inline_enhancement", true)) {
             $article = $this->enhance_inline_images($article);
@@ -202,7 +227,8 @@ class Af_Enhance_Images extends Plugin {
         // Fetch if OG extraction enabled and article lacks images (both enclosures and inline).
         // Uses article_has_images() so feeds with full inline content (NPR, The Verge) do NOT
         // get an og:thumbnail - that would duplicate the inline images already in the content.
-        if ($extract_og && !$this->article_has_images($article)) {
+        $article_for_has_images_check = ['content' => $original_content, 'enclosures' => $article['enclosures'] ?? []];
+        if ($extract_og && !$this->article_has_images($article_for_has_images_check)) {
             $should_fetch = true;
         }
 
@@ -244,8 +270,21 @@ class Af_Enhance_Images extends Plugin {
     }
 
     /**
-     * Hook: Ensure content is never null before API response processing
-     * This prevents TypeError in DiskCache::rewrite_urls()
+     * Hook: display-time cleanup applied to every API response (all clients,
+     * including FreshAPI/Capy Reader).
+     *
+     * 1. Ensures content is never null (prevents TypeError in
+     *    DiskCache::rewrite_urls(), which core calls right after this hook).
+     * 2. Strips tracking pixels again at display time. hook_article_filter()
+     *    only fixes articles at import, so articles stored before that feature
+     *    existed keep their pixels forever; re-stripping here cleans the whole
+     *    backlog without touching the database. This hook runs BEFORE
+     *    DiskCache::rewrite_urls(), so original URLs (with their /tracking/ or
+     *    -pixel. giveaways) and any stored width/height are still visible.
+     * 3. Clears flavor_image when it points at a tracking-pixel URL. Core
+     *    computes flavor_image from the raw stored content before this hook
+     *    runs, so on old articles it can be the pixel itself - which loads
+     *    "successfully" as a 1x1 and defeats client-side onerror fallbacks.
      */
     public function hook_render_article_api($row) {
         // Extract article from wrapper (may be 'headline', 'article', or unwrapped)
@@ -257,6 +296,32 @@ class Af_Enhance_Images extends Plugin {
 
             Debug::log("af_enhance_images: Fixed null/missing content for article: " .
                 ($article['title'] ?? 'unknown'), Debug::LOG_VERBOSE);
+        }
+
+        if ($this->host->get($this, "strip_tracking_pixels", true)) {
+            if (stripos($article['content'], '<img') !== false) {
+                $stripped = preg_replace_callback(
+                    '/<img\s+([^>]*?)>/is',
+                    function($matches) {
+                        if ($this->is_tracking_pixel($matches[0]) ||
+                            $this->has_tracking_pixel_url($matches[0])) {
+                            return '';
+                        }
+                        return $matches[0];
+                    },
+                    $article['content']
+                );
+                // preg_replace_callback returns null on regex failure; never
+                // replace real content with null
+                if ($stripped !== null) {
+                    $article['content'] = $stripped;
+                }
+            }
+
+            if (!empty($article['flavor_image']) &&
+                preg_match('#/tracking[/.]|[-_]pixel\.#i', $article['flavor_image'])) {
+                $article['flavor_image'] = '';
+            }
         }
 
         // Always return unwrapped article (callback will handle it)
@@ -274,12 +339,13 @@ class Af_Enhance_Images extends Plugin {
 
         $content = $article['content'];
         $modifications = [];
+        $strip_tracking_pixels = $this->host->get($this, "strip_tracking_pixels", true);
 
         // Process all img tags
         $content = preg_replace_callback(
             '/<img\s+([^>]*?)>/is',
-            function($matches) use (&$modifications) {
-                return $this->enhance_img_tag($matches[0], $modifications);
+            function($matches) use (&$modifications, $strip_tracking_pixels) {
+                return $this->enhance_img_tag($matches[0], $modifications, $strip_tracking_pixels);
             },
             $content
         );
@@ -295,7 +361,73 @@ class Af_Enhance_Images extends Plugin {
         return $article;
     }
 
-    private function enhance_img_tag($img_tag, &$modifications) {
+    /**
+     * Extract declared width/height attribute values from an <img ...> tag string.
+     * Either entry is null if the attribute is absent or non-numeric.
+     */
+    private function get_declared_dimensions($img_tag) {
+        $width = null;
+        $height = null;
+
+        if (preg_match('/\swidth\s*=\s*["\']?\s*(\d+)(?:px)?\s*["\']?/i', $img_tag, $m)) {
+            $width = (int)$m[1];
+        }
+        if (preg_match('/\sheight\s*=\s*["\']?\s*(\d+)(?:px)?\s*["\']?/i', $img_tag, $m)) {
+            $height = (int)$m[1];
+        }
+
+        return [$width, $height];
+    }
+
+    /**
+     * Detect tracking/beacon pixels by declared size alone: <img> tags with both
+     * width and height present and <= 2px. Deliberately not URL/domain-based —
+     * no hardcoded tracker list to invent or keep up to date. Known limitation:
+     * misses beacons that omit width/height attributes entirely (see
+     * has_tracking_pixel_url() for that case).
+     */
+    private function is_tracking_pixel($img_tag) {
+        [$width, $height] = $this->get_declared_dimensions($img_tag);
+        return $width !== null && $height !== null && $width <= 2 && $height <= 2;
+    }
+
+    /**
+     * Detect tracking/beacon pixels whose URL path/filename gives them away
+     * (e.g. NPR's own RSS beacon: media.npr.org/include/images/tracking/npr-rss-pixel.png),
+     * for pixels with no declared width/height for is_tracking_pixel() to catch.
+     * Matches the same heuristic already used client-side in the Rhesus web reader
+     * (ArticleReader.vue's parseHero/processContent). This must run here, at
+     * import time, before TT-RSS's own image-caching layer rewrites <img src> to
+     * a local cache path — once rewritten, the "tracking"/"pixel" URL segment is
+     * gone and neither this check nor the client-side one can see it anymore.
+     */
+    private function has_tracking_pixel_url($img_tag) {
+        if (!preg_match('/\s(?:data-)?src\s*=\s*["\']([^"\']+)["\']/i', $img_tag, $m)) {
+            return false;
+        }
+        return preg_match('#/tracking[/.]|[-_]pixel\.#i', $m[1]) === 1;
+    }
+
+    /**
+     * Detect small icon/share-button images by declared size: <img> tags with both
+     * width and height present and <= 50px. Many themes/plugins (e.g. "Social Media
+     * Feather") inject share-button icons directly into post content, which
+     * shouldn't count as "the article already has a real image" when deciding
+     * whether to fall back to og:image. Images with no declared dimensions are
+     * treated as real content, since they can't be judged by this heuristic.
+     */
+    private function is_icon_sized_image($img_tag) {
+        [$width, $height] = $this->get_declared_dimensions($img_tag);
+        return $width !== null && $height !== null && $width <= 50 && $height <= 50;
+    }
+
+    private function enhance_img_tag($img_tag, &$modifications, $strip_tracking_pixels = true) {
+        if ($strip_tracking_pixels &&
+            ($this->is_tracking_pixel($img_tag) || $this->has_tracking_pixel_url($img_tag))) {
+            $modifications[] = 'removed tracking pixel';
+            return '';
+        }
+
         $original = $img_tag;
 
         // Step 1: Handle lazy loading - convert data-src to src.
@@ -380,11 +512,24 @@ class Af_Enhance_Images extends Plugin {
         return $img_tag;
     }
 
+    /**
+     * Target display width for srcset selection. Candidates at least this wide
+     * are "big enough"; among those the SMALLEST is chosen, so multi-thousand-
+     * pixel originals (e.g. a 4764w camera original) don't get cached and
+     * proxied to every client when a ~1600w variant renders identically.
+     * Candidates below the target fall back to largest-available. Density
+     * descriptors (2x) are compared as roughly (density * 1000)px wide.
+     */
+    private const SRCSET_TARGET_WIDTH = 1600;
+
     private function extract_highest_res_from_srcset($srcset) {
         $sources = array_map('trim', explode(',', $srcset));
 
-        $highest_width = 0;
-        $highest_url = null;
+        $best_over_width = PHP_FLOAT_MAX;  // smallest candidate >= target
+        $best_over_url = null;
+        $best_under_width = 0;             // largest candidate < target (fallback)
+        $best_under_url = null;
+        $first_bare_url = null;            // descriptor-less entry (last resort)
 
         foreach ($sources as $source) {
             if (preg_match('/^(.+?)\s+(\d+(?:\.\d+)?)(w|x)$/i', $source, $match)) {
@@ -394,18 +539,23 @@ class Af_Enhance_Images extends Plugin {
 
                 $comparable_width = ($descriptor === 'w') ? $value : $value * 1000;
 
-                if ($comparable_width > $highest_width) {
-                    $highest_width = $comparable_width;
-                    $highest_url = $url;
+                if ($comparable_width >= self::SRCSET_TARGET_WIDTH) {
+                    if ($comparable_width < $best_over_width) {
+                        $best_over_width = $comparable_width;
+                        $best_over_url = $url;
+                    }
+                } elseif ($comparable_width > $best_under_width) {
+                    $best_under_width = $comparable_width;
+                    $best_under_url = $url;
                 }
             } elseif (trim($source) !== '') {
-                if ($highest_url === null) {
-                    $highest_url = trim($source);
+                if ($first_bare_url === null) {
+                    $first_bare_url = trim($source);
                 }
             }
         }
 
-        return $highest_url;
+        return $best_over_url ?? $best_under_url ?? $first_bare_url;
     }
 
     // =====================================================================
@@ -885,10 +1035,17 @@ class Af_Enhance_Images extends Plugin {
             }
         }
 
-        // Check for inline <img> tags
+        // Check for inline <img> tags, ignoring small icon-sized images (e.g.
+        // social share buttons some themes/plugins inject into post content) —
+        // those shouldn't count as "the article already has a real image" and
+        // block the og:image fallback below.
         $content = $article['content'] ?? '';
-        if (preg_match('/<img\s/i', $content)) {
-            return true;
+        if (preg_match_all('/<img\s+[^>]*>/i', $content, $matches)) {
+            foreach ($matches[0] as $img_tag) {
+                if (!$this->is_icon_sized_image($img_tag)) {
+                    return true;
+                }
+            }
         }
 
         return false;

@@ -433,6 +433,109 @@ class Af_Enhance_Images_Upgrade_Test extends TestCase {
         $this->assertFalse($result, 'Should ignore non-image enclosures');
     }
 
+    /**
+     * Test: article_has_images() ignores small icon-sized <img> tags (e.g. social
+     * share buttons some themes/plugins inject into post content), so the og:image
+     * fallback still fires for feeds whose only inline "images" are icons.
+     */
+    public function test_article_has_images_ignores_icon_sized_images() {
+        $article = [
+            'content' => '<img src="facebook.png" width="24" height="24" alt="Facebook">' .
+                '<img src="twitter.png" width="24" height="24" alt="twitter">',
+            'enclosures' => []
+        ];
+
+        $result = $this->callPrivateMethod('article_has_images', [$article]);
+
+        $this->assertFalse($result,
+            'Should not count small share-icon images as a real article image');
+    }
+
+    /**
+     * Test: a real content image alongside icon-sized images is still detected.
+     */
+    public function test_article_has_images_detects_real_image_among_icons() {
+        $article = [
+            'content' => '<img src="facebook.png" width="24" height="24" alt="Facebook">' .
+                '<img src="photo.jpg" width="800" height="600" alt="Photo">',
+            'enclosures' => []
+        ];
+
+        $result = $this->callPrivateMethod('article_has_images', [$article]);
+
+        $this->assertTrue($result, 'Should detect the real content image among icons');
+    }
+
+    /**
+     * Test: an <img> with no declared width/height still counts as a real image,
+     * since the icon heuristic can't judge undeclared dimensions (matches the
+     * existing NPR/The Verge full-content-image behavior).
+     */
+    public function test_article_has_images_treats_undeclared_dimensions_as_real() {
+        $article = [
+            'content' => '<img src="https://npr.example.com/photo.jpg" alt="Photo">',
+            'enclosures' => []
+        ];
+
+        $result = $this->callPrivateMethod('article_has_images', [$article]);
+
+        $this->assertTrue($result,
+            'Images without declared width/height should count as real content');
+    }
+
+    /**
+     * Test: is_icon_sized_image() boundary - 50x50 is icon-sized (inclusive),
+     * 51x51 is not.
+     */
+    public function test_is_icon_sized_image_boundary() {
+        $icon = $this->callPrivateMethod('is_icon_sized_image', ['<img width="50" height="50">']);
+        $this->assertTrue($icon, '50x50 should be treated as icon-sized');
+
+        $notIcon = $this->callPrivateMethod('is_icon_sized_image', ['<img width="51" height="51">']);
+        $this->assertFalse($notIcon, '51x51 should not be treated as icon-sized');
+    }
+
+    /**
+     * Regression test: enhance_inline_images() (Feature 1) unconditionally strips
+     * width/height attributes from every surviving <img> tag. If article_has_images()
+     * were called on that already-enhanced content instead of the original, the size
+     * evidence needed to recognize icon-sized share buttons would already be gone,
+     * silently defeating the icon filter and blocking the og:image fallback for
+     * exactly the feeds it's meant to help (e.g. sites using "Social Media Feather").
+     * hook_article_filter() must evaluate article_has_images() against the pristine
+     * pre-enhancement content, not the post-enhancement one.
+     */
+    public function test_enhance_inline_images_erases_size_evidence_used_by_has_images_check() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="facebook.png" width="24" height="24" alt="Facebook">',
+            'enclosures' => []
+        ];
+
+        // Confirm the bug scenario: checking has-images on the pre-enhancement
+        // content correctly recognizes the icon and reports no real image.
+        $this->assertFalse(
+            $this->callPrivateMethod('article_has_images', [$article]),
+            'Icon-sized image should not count as a real image before enhancement'
+        );
+
+        // enhance_inline_images() strips width/height as part of its normal Step 4
+        // ("allows natural high-res display") - this is the mutation that must not
+        // be allowed to reach the has-images decision.
+        $enhanced = $this->callPrivateMethod('enhance_inline_images', [$article]);
+        $this->assertStringNotContainsString('width=', $enhanced['content'],
+            'Sanity check: enhance_inline_images should have stripped width/height');
+
+        // Checking has-images on the already-enhanced content would incorrectly
+        // report a real image, since the size evidence is gone - this is exactly
+        // why hook_article_filter must use the pre-enhancement copy.
+        $this->assertTrue(
+            $this->callPrivateMethod('article_has_images', [$enhanced]),
+            'Demonstrates the bug: post-enhancement content loses the size evidence, ' .
+            'so hook_article_filter must check article_has_images() before Feature 1 runs'
+        );
+    }
+
     // =====================================================================
     // HELPER METHODS
     // =====================================================================

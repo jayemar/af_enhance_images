@@ -316,8 +316,9 @@ class Af_Enhance_Images_Enclosure_Test extends TestCase {
 
         $result = $this->plugin->hook_article_filter($article);
 
-        $this->assertStringContainsString('src="3x.jpg"', $result['content'],
-            'Should extract highest density from srcset');
+        // 2x (~2000w equivalent) is the smallest candidate over the 1600w target
+        $this->assertStringContainsString('src="2x.jpg"', $result['content'],
+            'Should extract smallest density at or above the target width');
     }
 
     /**

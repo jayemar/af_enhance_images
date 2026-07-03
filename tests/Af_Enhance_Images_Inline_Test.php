@@ -75,6 +75,55 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
     }
 
     /**
+     * Test 1b: Srcset selection is capped - smallest candidate at or above the
+     * 1600w target wins over multi-thousand-pixel originals (bandwidth: the
+     * chosen URL gets cached server-side and proxied to every client).
+     */
+    public function test_srcset_selection_capped_at_target_width() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="thumb.jpg" srcset="small.jpg 800w, medium.jpg 1600w, huge.jpg 3200w">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="medium.jpg"', $result['content'],
+            'Should pick the smallest candidate at or above 1600w, not the absolute largest');
+    }
+
+    /**
+     * Test 1c: Real-world NPR-style srcset where the original is a 4764w camera
+     * image - the ~2000w web variant should be selected instead.
+     */
+    public function test_srcset_avoids_oversized_camera_originals() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="thumb.jpg" srcset="img-800.jpg 800w, img-1200.jpg 1200w, img-2000.jpg 2000w, img-original.jpg 4764w">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="img-2000.jpg"', $result['content'],
+            'Should avoid the oversized original when a big-enough variant exists');
+    }
+
+    /**
+     * Test 1d: When every candidate is below the target, the largest available
+     * still wins (the cap must never downgrade quality).
+     */
+    public function test_srcset_below_target_picks_largest() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => '<img src="thumb.jpg" srcset="a.jpg 300w, b.jpg 768w, c.jpg 1024w">'
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="c.jpg"', $result['content'],
+            'Should fall back to the largest candidate when none reach the target');
+    }
+
+    /**
      * Test 2: Srcset with pixel density descriptors (2x, 3x)
      */
     public function test_rewrites_src_from_srcset_with_density_descriptors() {
@@ -85,8 +134,10 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
 
         $result = $this->plugin->hook_article_filter($article);
 
-        $this->assertStringContainsString('src="image@3x.jpg"', $result['content'],
-            'Should use highest pixel density image (3x)');
+        // 2x (~2000w equivalent) is the smallest candidate over the 1600w
+        // target, so it wins over the heavier 3x
+        $this->assertStringContainsString('src="image@2x.jpg"', $result['content'],
+            'Should use the smallest density at or above the target width (2x)');
     }
 
     /**
@@ -336,7 +387,9 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
     }
 
     /**
-     * Test 18: Preserve other img attributes during enhancement
+     * Test 18: Preserve non-sizing attributes during enhancement. Sizing
+     * attributes (width/height/srcset/sizes) are intentionally REMOVED by
+     * Step 4 so readers display the image at natural resolution.
      */
     public function test_preserves_other_img_attributes() {
         $article = [
@@ -349,10 +402,10 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
 
         $this->assertStringContainsString('alt="Test image"', $result['content'],
             'Should preserve alt attribute');
-        $this->assertStringContainsString('width="800"', $result['content'],
-            'Should preserve width attribute');
         $this->assertStringContainsString('class="featured"', $result['content'],
             'Should preserve class attribute');
+        $this->assertStringNotContainsString('width=', $result['content'],
+            'Sizing attributes are intentionally removed (Step 4)');
     }
 
     /**
@@ -485,11 +538,12 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
 
         $result = $this->plugin->hook_article_filter($article);
 
-        // Plugin now adds src from srcset for better browser compatibility
+        // Plugin adds src from srcset for better browser compatibility, then
+        // Step 4 intentionally removes the (now redundant) srcset attribute
         $this->assertStringContainsString('src="large.jpg"', $result['content'],
             'Should add src from srcset when src missing');
-        $this->assertStringContainsString('srcset=', $result['content'],
-            'Should preserve srcset');
+        $this->assertStringNotContainsString('srcset=', $result['content'],
+            'srcset is intentionally removed after extraction (Step 4)');
     }
 
     /**
@@ -513,8 +567,9 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
 
         $result = $this->plugin->hook_article_filter($article);
 
-        $this->assertStringContainsString('src="img-2000.jpg"', $result['content'],
-            'Should find highest resolution in long srcset');
+        // 1600w exactly meets the target width, so it wins over 2000w
+        $this->assertStringContainsString('src="img-1600.jpg"', $result['content'],
+            'Should pick the smallest candidate at or above the target in a long srcset');
     }
 
     /**

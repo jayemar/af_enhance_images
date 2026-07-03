@@ -239,7 +239,9 @@ class Af_Enhance_Images_Integration_Test extends TestCase {
         $row = ['headline' => $filtered];
         $api_result = $this->plugin->hook_render_article_api($row);
 
-        $this->assertStringContainsString('src="large.jpg"', $api_result['headline']['content'],
+        // hook_render_article_api returns the UNWRAPPED article (core assigns
+        // the return value directly over the headline row)
+        $this->assertStringContainsString('src="large.jpg"', $api_result['content'],
             'Article filter changes should be preserved through API hook');
     }
 
@@ -254,9 +256,9 @@ class Af_Enhance_Images_Integration_Test extends TestCase {
 
         $result = $this->plugin->hook_render_article_api($row);
 
-        $this->assertIsString($result['headline']['content'],
+        $this->assertIsString($result['content'],
             'API hook should convert null to string');
-        $this->assertEquals('', $result['headline']['content']);
+        $this->assertSame('', $result['content']);
     }
 
     // =====================================================================
@@ -347,8 +349,9 @@ class Af_Enhance_Images_Integration_Test extends TestCase {
 
         $result = $this->plugin->hook_article_filter($article);
 
-        // Should choose retina.jpg (2x = 2000w equivalent, highest)
-        $this->assertStringContainsString('src="retina.jpg"', $result['content']);
+        // xlarge (1920w) is the smallest candidate at or above the 1600w
+        // target, beating retina (2x = ~2000w equivalent)
+        $this->assertStringContainsString('src="xlarge.jpg"', $result['content']);
     }
 
     public function test_preserves_article_structure_through_processing() {
