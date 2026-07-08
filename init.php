@@ -43,6 +43,7 @@ class Af_Enhance_Images extends Plugin {
         $this->host = $host;
         $host->add_hook($host::HOOK_ARTICLE_FILTER, $this);
         $host->add_hook($host::HOOK_RENDER_ARTICLE_API, $this);
+        $host->add_hook($host::HOOK_QUERY_HEADLINES, $this);
         $host->add_hook($host::HOOK_PREFS_TAB, $this);
 
         // Diagnostic: Confirm plugin initialization (non-verbose for visibility)
@@ -324,8 +325,56 @@ class Af_Enhance_Images extends Plugin {
             }
         }
 
+        $article['content'] = $this->fix_escaped_anchor_tags($article['content']);
+
         // Always return unwrapped article (callback will handle it)
         return $article;
+    }
+
+    // Some publishers (e.g. KPBS, on an Arc Publishing-style CMS) serialize
+    // a structured "credit link" component to their RSS feed as a broken,
+    // HTML-entity-escaped <a> tag instead of real markup - the CMS's own
+    // website renders the same underlying data correctly via its own
+    // component/JS layer, but the feed itself, as delivered to every
+    // subscriber, contains literal text like:
+    //   &lt;a href="https://example.com/staff/x" data-cms-id="..." link-data="{...}"&gt;Jane Doe&lt;/a&gt;
+    // Browsers render that as visible text rather than a link, since the
+    // angle brackets are entities, not real markup. This decodes it back
+    // into a clean, real anchor tag, dropping the CMS-internal attributes.
+    // Runs at display time (every API response) rather than only at import,
+    // so it also fixes articles already stored before this existed.
+    private function fix_escaped_anchor_tags($content) {
+        if ($content === null || $content === '' || stripos($content, '&lt;a ') === false) {
+            return $content;
+        }
+
+        $fixed = preg_replace(
+            '/&lt;a\s+href="([^"]+)"[^&]*?&gt;(.*?)&lt;\/a&gt;/is',
+            '<a href="$1">$2</a>',
+            $content
+        );
+
+        // preg_replace returns null on regex failure; never replace real
+        // content with null
+        return $fixed !== null ? $fixed : $content;
+    }
+
+    // Headline list responses (getHeadlines with show_excerpt) compute their
+    // "excerpt" field from a content_preview that core builds by truncating
+    // the RAW stored content BEFORE HOOK_RENDER_ARTICLE_API ever runs - so
+    // the fix above never reaches it, and the truncation itself often cuts
+    // the escaped anchor tag off mid-attribute (no closing &lt;/a&gt;), which
+    // would make fix_escaped_anchor_tags() a no-op if applied afterward.
+    // Instead, this recomputes content_preview from the full fixed content,
+    // the same way core does (strip_tags + truncate_string), so the excerpt
+    // shown in the article list matches what the reader view already shows.
+    public function hook_query_headlines($line, $excerpt_length) {
+        if (isset($line["content"]) && stripos($line["content"], '&lt;a ') !== false) {
+            $fixed_content = $this->fix_escaped_anchor_tags($line["content"]);
+            $line["content_preview"] = truncate_string(strip_tags($fixed_content), $excerpt_length);
+        }
+
+        return $line;
     }
 
     // =====================================================================
@@ -421,7 +470,44 @@ class Af_Enhance_Images extends Plugin {
         return $width !== null && $height !== null && $width <= 50 && $height <= 50;
     }
 
+    /**
+     * Re-quote single-quoted HTML attributes whose value contains an internal
+     * apostrophe (e.g. alt='The nation's capital...') as double-quoted. PHP's
+     * strip_tags() - used by TT-RSS core to compute the article-list excerpt -
+     * has no real quote-tracking and gets confused by this, losing track of
+     * where the tag ends and swallowing the following real text. Real HTML
+     * parsers (browsers, DOMParser) handle the original single-quoting fine via
+     * proper tokenization, which is why this only breaks the excerpt, not the
+     * full-content reader view.
+     *
+     * Finds each single-quoted value's TRUE closing quote - the ' immediately
+     * followed by the next attribute or the tag's end - via a lazy capture with
+     * a lookahead, mirroring the tokenization strip_tags() gets wrong. Only
+     * re-quotes when the value actually contains an apostrophe (the ambiguous
+     * case); leaves ordinary single-quoted attributes untouched. Skips
+     * re-quoting if the value contains a literal double-quote (rare; would need
+     * its own escaping strategy, not worth solving here).
+     */
+    private function fix_ambiguous_single_quotes($img_tag) {
+        return preg_replace_callback(
+            '/([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*\'(.*?)\'(?=\s+[a-zA-Z_:][-a-zA-Z0-9_:.]*\s*=|\s*\/?>)/is',
+            function($m) {
+                [$whole, $attr, $value] = $m;
+                if (strpos($value, '"') !== false) return $whole;   // leave ambiguous-but-unsafe case alone
+                if (strpos($value, "'") === false) return $whole;   // no apostrophe, nothing ambiguous
+                return $attr . '="' . $value . '"';
+            },
+            $img_tag
+        );
+    }
+
     private function enhance_img_tag($img_tag, &$modifications, $strip_tracking_pixels = true) {
+        $requoted = $this->fix_ambiguous_single_quotes($img_tag);
+        if ($requoted !== $img_tag) {
+            $modifications[] = 'requoted ambiguous attribute';
+            $img_tag = $requoted;
+        }
+
         if ($strip_tracking_pixels &&
             ($this->is_tracking_pixel($img_tag) || $this->has_tracking_pixel_url($img_tag))) {
             $modifications[] = 'removed tracking pixel';

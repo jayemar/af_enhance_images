@@ -617,4 +617,236 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
         $this->assertStringContainsString('src="large.jpg"', $result['content'],
             'Should prioritize srcset even when data-src present');
     }
+
+    /**
+     * TEST GROUP: AMBIGUOUS SINGLE-QUOTED ATTRIBUTE RE-QUOTING
+     *
+     * Real-world case: NPR's RSS feed emits <img alt='...'> where the alt text
+     * contains an apostrophe (e.g. "nation's"). PHP's strip_tags() - used by
+     * TT-RSS core to compute the article-list excerpt - loses track of the tag
+     * boundary at that internal apostrophe and swallows the following real
+     * article text, producing an empty excerpt even though the reader (which
+     * uses a real HTML parser) renders fine.
+     */
+
+    /**
+     * Test 29: Single-quoted attribute with an internal apostrophe gets re-quoted
+     */
+    public function test_requotes_single_quoted_attr_with_internal_apostrophe() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => "<img src='https://example.com/x.jpg' alt='The nation's capital may be the focal point of the celebration.'/>"
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString(
+            'alt="The nation\'s capital may be the focal point of the celebration."',
+            $result['content'],
+            'Should re-quote the ambiguous single-quoted alt attribute as double-quoted'
+        );
+        $this->assertStringNotContainsString("alt='The nation", $result['content'],
+            'Should not leave the old single-quoted form');
+    }
+
+    /**
+     * Test 30: The actual downstream failure mode is fixed - PHP's real
+     * strip_tags() no longer swallows the text following the <img> tag.
+     * This is the critical regression-proof test: it doesn't just check that
+     * the tag "looks" re-quoted, it proves the real bug (empty excerpt) is gone.
+     */
+    public function test_strip_tags_survives_requoted_apostrophe_attr() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => "<img src='https://example.com/x.jpg' alt='The nation's capital may be the focal point of the celebration.'/><p>First real paragraph.</p><p>Second real paragraph.</p>"
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+        $stripped = strip_tags($result['content']);
+
+        $this->assertStringContainsString('First real paragraph.', $stripped,
+            'strip_tags() must no longer eat the text after the <img> tag');
+        $this->assertStringContainsString('Second real paragraph.', $stripped,
+            'strip_tags() must no longer eat the text after the <img> tag');
+    }
+
+    /**
+     * Test 31: Single-quoted attributes with no internal apostrophe are left alone
+     */
+    public function test_leaves_single_quoted_attrs_without_apostrophe_unchanged() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => "<img src='image.jpg' srcset='small.jpg 300w, large.jpg 1200w'>"
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        // srcset gets extracted to src and removed by existing steps regardless;
+        // the point here is that re-quoting doesn't fire when there's no apostrophe
+        $this->assertStringContainsString('large.jpg', $result['content']);
+    }
+
+    /**
+     * Test 32: Value containing a literal double-quote is left as-is (rare,
+     * unsafe to re-quote automatically)
+     */
+    public function test_skips_requoting_when_value_contains_double_quote() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => "<img src='image.jpg' alt='He said \"hi\" y'all'>"
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        // Should not crash or mangle; the src attribute should still be processed normally
+        $this->assertStringContainsString('image.jpg', $result['content']);
+    }
+
+    /**
+     * Test 33: Multiple apostrophe-containing single-quoted attributes on the
+     * same tag are all correctly bounded, and existing Step 4 logic (which
+     * strips width) still works correctly afterward - proves no interference
+     * between the new re-quoting step and the existing attribute-stripping steps.
+     */
+    public function test_requoting_handles_multiple_apostrophes_and_multiple_attrs() {
+        $article = [
+            'title' => 'Test Article',
+            'content' => "<img src='image.jpg' alt='The nation's capital' title='It's a big day' width='300'>"
+        ];
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('alt="The nation\'s capital"', $result['content']);
+        $this->assertStringContainsString('title="It\'s a big day"', $result['content']);
+        $this->assertStringNotContainsString('width=', $result['content'],
+            'Existing Step 4 should still strip width after re-quoting');
+    }
+
+    /**
+     * TEST GROUP: DOUBLE-ESCAPED ANCHOR TAG DECODING
+     *
+     * Real-world case: KPBS (Arc Publishing-style CMS) serializes a photo
+     * credit link component to its RSS feed as literal, HTML-entity-escaped
+     * markup instead of a real <a> tag - the CMS's own website renders the
+     * same underlying data correctly via its own component/JS layer, but the
+     * feed, as delivered to every subscriber, contains visible text like:
+     *   (&lt;a href="https://example.com/staff/x" link-data="{...}"&gt;Jane Doe&lt;/a&gt;)
+     * hook_render_article_api() runs at display time (every API response),
+     * so it fixes both newly-imported and already-stored articles.
+     */
+
+    /**
+     * Test 34: A double-escaped anchor tag with extra CMS attributes is
+     * decoded back into a clean, real <a href>.
+     */
+    public function test_decodes_double_escaped_anchor_tag() {
+        $row = [
+            'headline' => [
+                'title' => 'Test Article',
+                'content' => '<figcaption>Credit <span>(&lt;a href="https://example.com/staff/jane-doe" data-cms-id="abc123" link-data="{"link":{"linkText":"Jane Doe"}}"&gt;Jane Doe&lt;/a&gt;)</span></figcaption>',
+            ],
+        ];
+
+        $result = $this->plugin->hook_render_article_api($row);
+
+        $this->assertStringContainsString(
+            '<a href="https://example.com/staff/jane-doe">Jane Doe</a>',
+            $result['content'],
+            'Should decode the escaped anchor into a clean real link'
+        );
+        $this->assertStringNotContainsString('&lt;a', $result['content'],
+            'Should not leave any escaped tag markup behind');
+        $this->assertStringNotContainsString('data-cms-id', $result['content'],
+            'Should drop CMS-internal attributes, not carry them into the real tag');
+    }
+
+    /**
+     * Test 35: Content with no escaped anchor tags is left completely
+     * unchanged (the fast substring pre-check should skip the regex).
+     */
+    public function test_leaves_content_without_escaped_anchors_unchanged() {
+        $row = [
+            'headline' => [
+                'title' => 'Test Article',
+                'content' => '<p>Ordinary content with a real <a href="https://example.com">link</a>.</p>',
+            ],
+        ];
+
+        $result = $this->plugin->hook_render_article_api($row);
+
+        $this->assertSame(
+            '<p>Ordinary content with a real <a href="https://example.com">link</a>.</p>',
+            $result['content']
+        );
+    }
+
+    /**
+     * Test 36: Multiple escaped anchors in the same article are each decoded
+     * independently and correctly.
+     */
+    public function test_decodes_multiple_escaped_anchors() {
+        $row = [
+            'headline' => [
+                'title' => 'Test Article',
+                'content' => 'By &lt;a href="https://example.com/a"&gt;Alice&lt;/a&gt; and &lt;a href="https://example.com/b"&gt;Bob&lt;/a&gt;',
+            ],
+        ];
+
+        $result = $this->plugin->hook_render_article_api($row);
+
+        $this->assertStringContainsString('<a href="https://example.com/a">Alice</a>', $result['content']);
+        $this->assertStringContainsString('<a href="https://example.com/b">Bob</a>', $result['content']);
+    }
+
+    /**
+     * Test 37: getHeadlines' excerpt is built from a content_preview that
+     * core computes by truncating RAW content before HOOK_RENDER_ARTICLE_API
+     * ever runs, so the anchor-tag fix above never reaches it on its own.
+     * hook_query_headlines() must recompute content_preview from the fixed
+     * content so the article-list excerpt matches the reader view.
+     */
+    public function test_query_headlines_fixes_escaped_anchor_in_excerpt() {
+        $line = [
+            'content' => 'Credit (&lt;a href="https://example.com/staff/jane-doe" data-cms-id="abc123"&gt;Jane Doe&lt;/a&gt;)',
+            'content_preview' => 'Credit (&lt;a href="https://example.com/staff/jane-doe" data-cms-id="abc123"&gt;Jane Doe&lt;/a&gt;)',
+        ];
+
+        $result = $this->plugin->hook_query_headlines($line, 250);
+
+        $this->assertStringContainsString('Jane Doe', $result['content_preview']);
+        $this->assertStringNotContainsString('&lt;a', $result['content_preview']);
+        $this->assertStringNotContainsString('data-cms-id', $result['content_preview']);
+    }
+
+    /**
+     * Test 38: when the raw content is truncated mid-tag (no closing
+     * &lt;/a&gt;), the excerpt-only fix must still work because it rebuilds
+     * content_preview from the full content, not by patching the already-
+     * truncated string.
+     */
+    public function test_query_headlines_handles_anchor_truncated_mid_attribute() {
+        $line = [
+            'content' => 'Credit (&lt;a href="https://example.com/staff/jane-doe" data-cms-id="abc123" link-data="{"link":{"linkText":"Jane Doe"}}"&gt;Jane Doe&lt;/a&gt;) and the rest of the article body continues on for a while after that.',
+            'content_preview' => 'Credit (&lt;a href="https://example.com/staff/jane-doe" data-cms-id="abc123" link-data="{"li&hellip;',
+        ];
+
+        $result = $this->plugin->hook_query_headlines($line, 250);
+
+        $this->assertStringNotContainsString('&lt;a', $result['content_preview']);
+        $this->assertStringNotContainsString('data-cms-id', $result['content_preview']);
+    }
+
+    /**
+     * Test 39: headlines without any escaped anchor are left untouched.
+     */
+    public function test_query_headlines_leaves_ordinary_excerpt_unchanged() {
+        $line = [
+            'content' => '<p>Ordinary content with no escaped markup.</p>',
+            'content_preview' => 'Ordinary content with no escaped markup.',
+        ];
+
+        $result = $this->plugin->hook_query_headlines($line, 250);
+
+        $this->assertSame('Ordinary content with no escaped markup.', $result['content_preview']);
+    }
 }

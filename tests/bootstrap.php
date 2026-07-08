@@ -13,6 +13,7 @@ class PluginHost {
     const HOOK_RENDER_ARTICLE_API = 2;
     const HOOK_ENCLOSURE_IMPORTED = 3;
     const HOOK_PREFS_TAB = 4;
+    const HOOK_QUERY_HEADLINES = 5;
 
     public $pdo;
 
@@ -43,6 +44,17 @@ class Debug {
 
     static function log($msg, $level = 0) {
         // No-op for testing
+    }
+}
+
+// Stub TT-RSS core function (include/functions.php)
+if (!function_exists('truncate_string')) {
+    function truncate_string(string $str, int $max_len, string $suffix = '&hellip;'): string {
+        if (mb_strlen($str, "utf-8") > $max_len) {
+            return mb_substr($str, 0, $max_len, "utf-8") . $suffix;
+        } else {
+            return $str;
+        }
     }
 }
 
