@@ -3,7 +3,7 @@
 namespace Tests;
 
 use PHPUnit\Framework\TestCase;
-use Af_Enhance_Images;
+use Af_Enhance_Content;
 
 /**
  * Test suite for Enclosure URL Upgrading
@@ -14,7 +14,7 @@ use Af_Enhance_Images;
  * 3. Upgrades low-resolution URLs to high-resolution
  * 4. Handles various URL patterns (BBC, CDN, query params)
  */
-class Af_Enhance_Images_Upgrade_Test extends TestCase {
+class Af_Enhance_Content_Upgrade_Test extends TestCase {
 
     private $plugin;
     private $mockHost;
@@ -32,7 +32,7 @@ class Af_Enhance_Images_Upgrade_Test extends TestCase {
             }');
         }
 
-        $this->plugin = new Af_Enhance_Images();
+        $this->plugin = new Af_Enhance_Content();
         $this->plugin->init($this->mockHost);
     }
 

@@ -8,7 +8,7 @@
          failOnRisky="true"
          stopOnFailure="false">
     <testsuites>
-        <testsuite name="Af_Enhance_Images Test Suite">
+        <testsuite name="Af_Enhance_Content Test Suite">
             <directory>tests</directory>
         </testsuite>
     </testsuites>

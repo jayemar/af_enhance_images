@@ -1,4 +1,4 @@
-# Testing Complete - af_enhance_images v2.0
+# Testing Complete - af_enhance_content v2.0
 
 ## Status: ✅ ALL TESTS PASSING
 
@@ -60,7 +60,7 @@ Tests: 36, Assertions: 48, Time: 00:00.022s
 
 ### Quick Test
 ```bash
-cd /home/jayemar/projects/af_enhance_images
+cd /home/jayemar/projects/af_enhance_content
 ./test.sh --testdox
 ```
 
@@ -79,11 +79,11 @@ cd /home/jayemar/projects/af_enhance_images
 ### Files Created
 1. **Dockerfile.test** - PHP 8.2 CLI container with PHPUnit
 2. **test.sh** - Wrapper script to build and run tests
-3. **tests/Af_Enhance_Images_Test.php** - v1.0 tests (updated for v2.0 compatibility)
-4. **tests/Af_Enhance_Images_V2_Test.php** - New v2.0 tests
+3. **tests/Af_Enhance_Content_Test.php** - v1.0 tests (updated for v2.0 compatibility)
+4. **tests/Af_Enhance_Content_V2_Test.php** - New v2.0 tests
 
 ### Key Fix Applied
-Updated `Af_Enhance_Images_Test.php` setUp() method to properly mock configuration:
+Updated `Af_Enhance_Content_Test.php` setUp() method to properly mock configuration:
 ```php
 $this->mockHost->expects($this->any())
     ->method('get')
@@ -154,7 +154,7 @@ These require manual testing with real feeds (see BBC-MUNDO-TESTING.md).
 
 ## Conclusion
 
-The af_enhance_images v2.0 plugin has:
+The af_enhance_content v2.0 plugin has:
 - ✅ **36 comprehensive unit tests** (100% pass rate)
 - ✅ **Isolated Docker test environment** (no host pollution)
 - ✅ **Complete documentation** (README updated)

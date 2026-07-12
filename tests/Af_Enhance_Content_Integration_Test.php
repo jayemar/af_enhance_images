@@ -3,10 +3,10 @@
 namespace Tests;
 
 use PHPUnit\Framework\TestCase;
-use Af_Enhance_Images;
+use Af_Enhance_Content;
 
 /**
- * Integration tests for Af_Enhance_Images
+ * Integration tests for Af_Enhance_Content
  *
  * Tests verify that multiple features work together correctly:
  * 1. Feature combinations don't conflict
@@ -14,7 +14,7 @@ use Af_Enhance_Images;
  * 3. Fetch logic triggers at the right times
  * 4. Complex real-world scenarios work end-to-end
  */
-class Af_Enhance_Images_Integration_Test extends TestCase {
+class Af_Enhance_Content_Integration_Test extends TestCase {
 
     private $plugin;
     private $mockHost;
@@ -32,7 +32,7 @@ class Af_Enhance_Images_Integration_Test extends TestCase {
             }');
         }
 
-        $this->plugin = new Af_Enhance_Images();
+        $this->plugin = new Af_Enhance_Content();
         $this->plugin->init($this->mockHost);
     }
 

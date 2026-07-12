@@ -3,7 +3,7 @@
 namespace Tests;
 
 use PHPUnit\Framework\TestCase;
-use Af_Enhance_Images;
+use Af_Enhance_Content;
 
 /**
  * Test suite for Open Graph metadata extraction and application
@@ -14,7 +14,7 @@ use Af_Enhance_Images;
  * 3. Applies OG data to articles (images, author, description)
  * 4. Handles edge cases and malformed HTML
  */
-class Af_Enhance_Images_OG_Test extends TestCase {
+class Af_Enhance_Content_OG_Test extends TestCase {
 
     private $plugin;
     private $mockHost;
@@ -32,7 +32,7 @@ class Af_Enhance_Images_OG_Test extends TestCase {
             }');
         }
 
-        $this->plugin = new Af_Enhance_Images();
+        $this->plugin = new Af_Enhance_Content();
         $this->plugin->init($this->mockHost);
     }
 
@@ -600,6 +600,192 @@ class Af_Enhance_Images_OG_Test extends TestCase {
 
         $this->assertStringNotContainsString('much longer description', $result['content'],
             'Should not enhance content when feature disabled');
+    }
+
+    // =====================================================================
+    // MEANINGFUL CONTENT / BODY EXTRACTION FALLBACK TESTS
+    // =====================================================================
+
+    public function test_article_has_meaningful_content_true_for_long_text() {
+        $article = ['content' => str_repeat('word ', 60)];
+
+        $result = $this->callPrivateMethod('article_has_meaningful_content', [$article]);
+
+        $this->assertTrue($result);
+    }
+
+    public function test_article_has_meaningful_content_false_for_short_text() {
+        $article = ['content' => '<p>Short.</p>'];
+
+        $result = $this->callPrivateMethod('article_has_meaningful_content', [$article]);
+
+        $this->assertFalse($result);
+    }
+
+    public function test_article_has_meaningful_content_false_for_empty_content() {
+        $article = ['content' => ''];
+
+        $result = $this->callPrivateMethod('article_has_meaningful_content', [$article]);
+
+        $this->assertFalse($result);
+    }
+
+    public function test_article_has_meaningful_content_strips_tags_before_counting() {
+        // Long enough as markup, but the actual text is under the threshold -
+        // must not count markup bytes toward the length.
+        $padding = str_repeat('<span></span>', 40);
+        $article = ['content' => $padding . '<p>Short.</p>'];
+
+        $result = $this->callPrivateMethod('article_has_meaningful_content', [$article]);
+
+        $this->assertFalse($result);
+    }
+
+    public function test_extract_body_summary_prefers_article_element() {
+        $html = '<html><body>
+            <nav><p>Home About Contact this paragraph is definitely long enough to pass the sixty character floor</p></nav>
+            <article>
+                <p>This is the real article paragraph with enough length to clear the minimum character threshold.</p>
+            </article>
+        </body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_summary', [$html]);
+
+        $this->assertStringContainsString('real article paragraph', $result);
+        $this->assertStringNotContainsString('Home About Contact', $result);
+    }
+
+    public function test_extract_body_summary_strips_script_and_style() {
+        $html = '<html><body>
+            <script>var x = "this looks like a long enough string to pass the length check accidentally";</script>
+            <style>.foo { content: "also long enough to pass the length check if not stripped properly"; }</style>
+            <main><p>Genuine paragraph text that is long enough to be picked up by the extraction heuristic.</p></main>
+        </body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_summary', [$html]);
+
+        $this->assertStringContainsString('Genuine paragraph text', $result);
+    }
+
+    public function test_extract_body_summary_skips_short_paragraphs() {
+        $html = '<html><body><main>
+            <p>Too short.</p>
+            <p>This paragraph is long enough on its own to clear the sixty character minimum threshold.</p>
+        </main></body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_summary', [$html]);
+
+        $this->assertStringNotContainsString('Too short.', $result);
+        $this->assertStringContainsString('This paragraph is long enough', $result);
+    }
+
+    public function test_extract_body_summary_returns_null_when_no_substantial_paragraphs() {
+        $html = '<html><body><main><p>Too short.</p></main></body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_summary', [$html]);
+
+        $this->assertNull($result);
+    }
+
+    public function test_extract_body_summary_returns_null_for_empty_html() {
+        $result = $this->callPrivateMethod('extract_body_summary', ['']);
+
+        $this->assertNull($result);
+    }
+
+    public function test_apply_og_metadata_falls_back_to_extracted_body_when_no_og_description() {
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'enhance_content') return true;
+                return $default;
+            });
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'Short',
+            'enclosures' => []
+        ];
+
+        $og_data = [
+            'image' => null,
+            'description' => null,
+            'author' => null,
+            'tags' => []
+        ];
+
+        $html = '<html><body><article>
+            <p>This extracted paragraph is long enough to clear the minimum length threshold for a summary.</p>
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data, $html]);
+
+        $this->assertStringContainsString('This extracted paragraph', $result['content'],
+            'Should fall back to extracted body text when og:description is unavailable');
+        $this->assertStringContainsString('🔍', $result['content'],
+            'Extracted-text summaries should be marked with the extraction icon');
+    }
+
+    public function test_apply_og_metadata_prefers_og_description_over_extraction() {
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'enhance_content') return true;
+                return $default;
+            });
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'Short',
+            'enclosures' => []
+        ];
+
+        $og_data = [
+            'image' => null,
+            'description' => 'This is the og:description that should be used instead of extraction',
+            'author' => null,
+            'tags' => []
+        ];
+
+        $html = '<html><body><article>
+            <p>This extracted paragraph should not be used since og:description is present.</p>
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data, $html]);
+
+        $this->assertStringContainsString('og:description that should be used', $result['content']);
+        $this->assertStringNotContainsString('should not be used since', $result['content']);
+        $this->assertStringNotContainsString('🔍', $result['content'],
+            'og:description summaries should not carry the extraction icon');
+    }
+
+    public function test_apply_og_metadata_no_fallback_when_extraction_finds_nothing() {
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'enhance_content') return true;
+                return $default;
+            });
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'Short original content',
+            'enclosures' => []
+        ];
+
+        $og_data = [
+            'image' => null,
+            'description' => null,
+            'author' => null,
+            'tags' => []
+        ];
+
+        $html = '<html><body><main><p>Too short.</p></main></body></html>';
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data, $html]);
+
+        $this->assertEquals('Short original content', $result['content'],
+            'Content should be unchanged when neither og:description nor extraction yield anything');
     }
 
     // =====================================================================

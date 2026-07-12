@@ -47,7 +47,7 @@ class ComposerStaticInit666a877135287dbb9d80f06a9af0f8dd
     );
 
     public static $classMap = array (
-        'Af_Enhance_Images' => __DIR__ . '/../..' . '/init.php',
+        'Af_Enhance_Content' => __DIR__ . '/../..' . '/init.php',
         'Composer\\InstalledVersions' => __DIR__ . '/..' . '/composer/InstalledVersions.php',
         'PHPUnit\\Exception' => __DIR__ . '/..' . '/phpunit/phpunit/src/Exception.php',
         'PHPUnit\\Framework\\ActualValueIsNotAnObjectException' => __DIR__ . '/..' . '/phpunit/phpunit/src/Framework/Exception/ActualValueIsNotAnObjectException.php',

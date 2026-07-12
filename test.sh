@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Run af_enhance_images tests in Docker container
+# Run af_enhance_content tests in Docker container
 #
 # Usage:
 #   ./test.sh              # Run all tests
@@ -14,8 +14,8 @@ cd "$SCRIPT_DIR"
 
 # Build test image
 echo "Building test container..."
-docker build -f Dockerfile.test -t af_enhance_images:test . -q
+docker build -f Dockerfile.test -t af_enhance_content:test . -q
 
 # Run tests with any additional arguments
 echo "Running tests..."
-docker run --rm af_enhance_images:test ./vendor/bin/phpunit "$@"
+docker run --rm af_enhance_content:test ./vendor/bin/phpunit "$@"

@@ -3,10 +3,10 @@
 namespace Tests;
 
 use PHPUnit\Framework\TestCase;
-use Af_Enhance_Images;
+use Af_Enhance_Content;
 
 /**
- * Test suite for Af_Enhance_Images plugin - Enclosure Handling
+ * Test suite for Af_Enhance_Content plugin - Enclosure Handling
  *
  * Tests verify enclosure-related functionality:
  * 1. Enclosure MIME type fixing
@@ -14,7 +14,7 @@ use Af_Enhance_Images;
  * 3. Enclosure URL upgrading (BBC Mundo feature)
  * 4. Configuration handling
  */
-class Af_Enhance_Images_Enclosure_Test extends TestCase {
+class Af_Enhance_Content_Enclosure_Test extends TestCase {
 
     private $plugin;
     private $mockHost;
@@ -37,7 +37,7 @@ class Af_Enhance_Images_Enclosure_Test extends TestCase {
         }
 
         // Create plugin instance
-        $this->plugin = new Af_Enhance_Images();
+        $this->plugin = new Af_Enhance_Content();
         $this->plugin->init($this->mockHost);
     }
 

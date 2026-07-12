@@ -3,10 +3,10 @@
 namespace Tests;
 
 use PHPUnit\Framework\TestCase;
-use Af_Enhance_Images;
+use Af_Enhance_Content;
 
 /**
- * Test suite for Af_Enhance_Images plugin - Inline Image Enhancement
+ * Test suite for Af_Enhance_Content plugin - Inline Image Enhancement
  *
  * Tests verify that the plugin correctly:
  * 1. Extracts highest resolution from srcset and rewrites src
@@ -14,7 +14,7 @@ use Af_Enhance_Images;
  * 3. Removes loading="lazy" attributes
  * 4. Handles edge cases and malformed HTML
  */
-class Af_Enhance_Images_Inline_Test extends TestCase {
+class Af_Enhance_Content_Inline_Test extends TestCase {
 
     private $plugin;
     private $mockHost;
@@ -53,7 +53,7 @@ class Af_Enhance_Images_Inline_Test extends TestCase {
         }
 
         // Create plugin instance
-        $this->plugin = new Af_Enhance_Images();
+        $this->plugin = new Af_Enhance_Content();
         $this->plugin->init($this->mockHost);
     }
 

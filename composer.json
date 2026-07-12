@@ -1,6 +1,6 @@
 {
-    "name": "jayemar/af-enhance-images",
-    "description": "TT-RSS plugin to enhance image quality by rewriting srcset to src",
+    "name": "jayemar/af-enhance-content",
+    "description": "TT-RSS plugin to enhance article content: images, Open Graph metadata, markup repair, and content backfill",
     "type": "library",
     "license": "MIT",
     "require": {

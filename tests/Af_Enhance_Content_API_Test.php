@@ -3,10 +3,10 @@
 namespace Tests;
 
 use PHPUnit\Framework\TestCase;
-use Af_Enhance_Images;
+use Af_Enhance_Content;
 
 /**
- * Test suite for Af_Enhance_Images hook_render_article_api
+ * Test suite for Af_Enhance_Content hook_render_article_api
  *
  * Contract note: HOOK_RENDER_ARTICLE_API receives a wrapper row
  * (['headline' => ...] from getHeadlines, ['article' => ...] from getArticle)
@@ -22,7 +22,7 @@ use Af_Enhance_Images;
  *    stored before import-time stripping existed, for every client.
  * 3. Clears flavor_image when it is itself a tracking-pixel URL.
  */
-class Af_Enhance_Images_API_Test extends TestCase {
+class Af_Enhance_Content_API_Test extends TestCase {
 
     private $plugin;
     private $mockHost;
@@ -48,7 +48,7 @@ class Af_Enhance_Images_API_Test extends TestCase {
             }');
         }
 
-        $this->plugin = new Af_Enhance_Images();
+        $this->plugin = new Af_Enhance_Content();
         $this->plugin->init($this->mockHost);
     }
 
@@ -65,7 +65,7 @@ class Af_Enhance_Images_API_Test extends TestCase {
                 return $default;
             });
 
-        $plugin = new Af_Enhance_Images();
+        $plugin = new Af_Enhance_Content();
         $plugin->init($mockHost);
         return $plugin;
     }

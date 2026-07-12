@@ -1,14 +1,14 @@
-# Tests and README Added for af_enhance_images v2.0
+# Tests and README Added for af_enhance_content v2.0
 
 ## Summary
 
-Added comprehensive testing and documentation for the consolidated af_enhance_images v2.0 plugin.
+Added comprehensive testing and documentation for the consolidated af_enhance_content v2.0 plugin.
 
 ## What Was Added
 
 ### 1. New Test Suite (20+ tests)
 
-**File:** `tests/Af_Enhance_Images_V2_Test.php`
+**File:** `tests/Af_Enhance_Content_V2_Test.php`
 
 #### Test Groups
 
@@ -47,7 +47,7 @@ Added comprehensive testing and documentation for the consolidated af_enhance_im
 
 ### 2. Existing Tests (18 tests)
 
-**File:** `tests/Af_Enhance_Images_Test.php`
+**File:** `tests/Af_Enhance_Content_Test.php`
 
 Already existed and covers:
 - ✅ Srcset rewriting (width and density descriptors)
@@ -91,7 +91,7 @@ Already existed and covers:
 ```bash
 # Copy test files into container
 docker compose exec app sh -c "
-cd /var/www/html/tt-rss/plugins.local/af_enhance_images &&
+cd /var/www/html/tt-rss/plugins.local/af_enhance_content &&
 ./vendor/bin/phpunit --testdox
 "
 ```
@@ -103,7 +103,7 @@ cd /var/www/html/tt-rss/plugins.local/af_enhance_images &&
 docker compose exec -it app sh
 
 # Navigate to plugin
-cd /var/www/html/tt-rss/plugins.local/af_enhance_images
+cd /var/www/html/tt-rss/plugins.local/af_enhance_content
 
 # Run tests
 ./vendor/bin/phpunit --testdox
@@ -117,7 +117,7 @@ cd /var/www/html/tt-rss/plugins.local/af_enhance_images
 ```
 PHPUnit 9.5.x by Sebastian Bergmann and contributors.
 
-Af Enhance Images (Tests\Af_Enhance_Images_Test)
+Af Enhance Images (Tests\Af_Enhance_Content_Test)
  ✔ Rewrites src from srcset with width descriptors
  ✔ Rewrites src from srcset with density descriptors
  ✔ Handles mixed srcset descriptors
@@ -137,7 +137,7 @@ Af Enhance Images (Tests\Af_Enhance_Images_Test)
  ✔ Handles decimal density descriptors
  ✔ Preserves other img attributes
 
-Af Enhance Images V2 (Tests\Af_Enhance_Images_V2_Test)
+Af Enhance Images V2 (Tests\Af_Enhance_Content_V2_Test)
  ✔ Fixes empty enclosure mime type jpg
  ✔ Fixes empty enclosure mime type png
  ✔ Preserves existing mime type
@@ -175,13 +175,13 @@ The test suite provides comprehensive coverage:
 
 ## Files Modified
 
-- ✅ `tests/Af_Enhance_Images_V2_Test.php` - NEW (20+ tests for v2.0 features)
+- ✅ `tests/Af_Enhance_Content_V2_Test.php` - NEW (20+ tests for v2.0 features)
 - ✅ `README.md` - NEW (comprehensive documentation)
 - ✅ `TESTS-AND-README-ADDED.md` - This file
 
 ## Files Unchanged
 
-- ✅ `tests/Af_Enhance_Images_Test.php` - Existing 18 tests (still valid)
+- ✅ `tests/Af_Enhance_Content_Test.php` - Existing 18 tests (still valid)
 - ✅ `tests/bootstrap.php` - Test bootstrap (no changes needed)
 - ✅ `init.php` - Plugin code (already complete)
 - ✅ `composer.json` - Dependencies (already configured)
@@ -239,7 +239,7 @@ The test suite provides comprehensive coverage:
 
 ## Conclusion
 
-The af_enhance_images v2.0 plugin now has:
+The af_enhance_content v2.0 plugin now has:
 - ✅ **38+ comprehensive tests** covering all features
 - ✅ **Professional README.md** with complete documentation
 - ✅ **Clear migration guide** from v1.0 and separate plugins

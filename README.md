@@ -1,4 +1,4 @@
-# af_enhance_images
+# af_enhance_content
 
 **Version:** 2.0
 **Author:** jayemar
@@ -47,22 +47,22 @@ AFTER:  https://ichef.bbci.co.uk/ace/ws/1024/.../image.jpg (150 KB, sharp)
 
 ```bash
 cd /path/to/tt-rss/plugins.local/
-git clone https://github.com/yourusername/af_enhance_images.git
+git clone https://github.com/yourusername/af_enhance_content.git
 ```
 
 Or add to your `plugins.conf`:
 ```
-/home/jayemar/projects/af_enhance_images
+/home/jayemar/projects/af_enhance_content
 ```
 
 ### 2. Enable in TT-RSS
 
 Add to your `.env` or `docker-compose.yaml`:
 ```env
-TTRSS_PLUGINS=auth_internal, note, nginx_xaccel, af_enhance_images
+TTRSS_PLUGINS=auth_internal, note, nginx_xaccel, af_enhance_content
 ```
 
-Or enable in: **Preferences → Plugins → af_enhance_images**
+Or enable in: **Preferences → Plugins → af_enhance_content**
 
 ### 3. Configure settings
 
@@ -150,7 +150,7 @@ The plugin includes a comprehensive test suite with 36 tests covering all featur
 No PHP installation required on your host system. Tests run in an isolated container:
 
 ```bash
-cd /path/to/af_enhance_images
+cd /path/to/af_enhance_content
 
 # Run all tests
 ./test.sh --testdox
@@ -176,7 +176,7 @@ cd /path/to/af_enhance_images
 If you have PHP installed on your system:
 
 ```bash
-cd /path/to/af_enhance_images
+cd /path/to/af_enhance_content
 composer install
 ./vendor/bin/phpunit --testdox
 ```
@@ -214,7 +214,7 @@ Check if enabled:
 docker compose exec app printenv | grep TTRSS_PLUGINS
 ```
 
-Should include: `af_enhance_images`
+Should include: `af_enhance_content`
 
 ### No Changes to Images
 
@@ -249,15 +249,15 @@ TT-RSS caches article GUIDs. Deleted articles won't re-import if they're still i
 ### Project Structure
 
 ```
-af_enhance_images/
+af_enhance_content/
 ├── init.php              # Main plugin file (812 lines)
 ├── composer.json         # PHP dependencies
 ├── phpunit.xml           # Test configuration
 ├── README.md             # This file
 └── tests/
     ├── bootstrap.php     # Test bootstrap
-    ├── Af_Enhance_Images_Test.php       # v1.0 tests (18 tests)
-    └── Af_Enhance_Images_V2_Test.php    # v2.0 tests (20+ tests)
+    ├── Af_Enhance_Content_Test.php       # v1.0 tests (18 tests)
+    └── Af_Enhance_Content_V2_Test.php    # v2.0 tests (20+ tests)
 ```
 
 ### Adding New Features
@@ -265,7 +265,7 @@ af_enhance_images/
 1. Add configuration option in `hook_prefs_tab()`
 2. Add setting storage in `save()`
 3. Implement feature in `hook_article_filter()` or helper method
-4. Add tests in `tests/Af_Enhance_Images_V2_Test.php`
+4. Add tests in `tests/Af_Enhance_Content_V2_Test.php`
 5. Run tests: `./vendor/bin/phpunit`
 6. Update README.md
 
@@ -360,13 +360,13 @@ MIT License - see LICENSE file for details
 ## Credits
 
 - **Investigation & Implementation:** Claude Code (Sonnet 4.5)
-- **Original af_enhance_images:** jayemar
+- **Original af_enhance_content:** jayemar
 - **Testing & Integration:** jayemar
 
 ## Links
 
 - [TT-RSS Documentation](https://tt-rss.org/wiki/)
-- [Issue Tracker](https://github.com/yourusername/af_enhance_images/issues)
+- [Issue Tracker](https://github.com/yourusername/af_enhance_content/issues)
 - [BBC Mundo Testing Guide](../homelab/ttrss/BBC-MUNDO-TESTING.md)
 
 ## Changelog

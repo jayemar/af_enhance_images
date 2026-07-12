@@ -3,10 +3,10 @@
 namespace Tests;
 
 use PHPUnit\Framework\TestCase;
-use Af_Enhance_Images;
+use Af_Enhance_Content;
 
 /**
- * Test suite for Af_Enhance_Images plugin - Tracking Pixel Removal
+ * Test suite for Af_Enhance_Content plugin - Tracking Pixel Removal
  *
  * Tests verify that the plugin correctly:
  * 1. Strips <img> tags declared 2px or smaller in both width and height
@@ -15,7 +15,7 @@ use Af_Enhance_Images;
  * 3. Preserves images that match neither signal
  * 4. Respects the strip_tracking_pixels setting toggle
  */
-class Af_Enhance_Images_Tracking_Pixel_Test extends TestCase {
+class Af_Enhance_Content_Tracking_Pixel_Test extends TestCase {
 
     private $plugin;
     private $mockHost;
@@ -51,7 +51,7 @@ class Af_Enhance_Images_Tracking_Pixel_Test extends TestCase {
         }
 
         // Create plugin instance
-        $this->plugin = new Af_Enhance_Images();
+        $this->plugin = new Af_Enhance_Content();
         $this->plugin->init($this->mockHost);
     }
 
@@ -227,7 +227,7 @@ class Af_Enhance_Images_Tracking_Pixel_Test extends TestCase {
                 return $default;
             });
 
-        $plugin = new Af_Enhance_Images();
+        $plugin = new Af_Enhance_Content();
         $plugin->init($mockHost);
 
         $article = [
@@ -261,7 +261,7 @@ class Af_Enhance_Images_Tracking_Pixel_Test extends TestCase {
                 return $default;
             });
 
-        $plugin = new Af_Enhance_Images();
+        $plugin = new Af_Enhance_Content();
         $plugin->init($mockHost);
 
         $article = [

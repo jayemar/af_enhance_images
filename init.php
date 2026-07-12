@@ -1,12 +1,16 @@
 <?php
 /**
- * af_enhance_images - Comprehensive image enhancement for RSS feeds
+ * af_enhance_content - Comprehensive article content enhancement for RSS feeds
  *
- * This plugin provides complete image handling for TT-RSS:
+ * This plugin improves article quality for TT-RSS beyond what feeds provide
+ * on their own:
  * 1. Inline image enhancement (srcset, lazy loading)
  * 2. Enclosure MIME type fixing
  * 3. Open Graph metadata extraction
  * 4. Enclosure URL upgrading from article pages
+ * 5. Article markup repair (escaped anchor tags, ambiguous quoted attributes)
+ * 6. Content backfill for articles with little/no body text (og:description,
+ *    falling back to extracted article body text)
  *
  * Features:
  * - Rewrite img src to use highest resolution from srcset
@@ -16,25 +20,34 @@
  * - Fetch article pages and extract OG metadata
  * - Add og:image as enclosure
  * - Set author from og:article:author
- * - Enhance content with og:description
+ * - Backfill missing/short content from og:description, or extracted
+ *   article body text when no og:description is available
  * - Upgrade low-resolution enclosure URLs by fetching article page and extracting high-res URLs from srcset
+ * - Decode double-escaped anchor tags some CMSes emit into their RSS feeds
+ * - Re-quote single-quoted HTML attributes containing an apostrophe, which
+ *   otherwise breaks TT-RSS core's strip_tags()-based excerpt computation
  *
  * Installation:
- * 1. Copy this directory to plugins.local/af_enhance_images/
+ * 1. Copy this directory to plugins.local/af_enhance_content/
  * 2. Enable the plugin in Preferences -> Plugins
- * 3. Configure in Preferences -> Feeds -> Image Enhancement
+ * 3. Configure in Preferences -> Feeds -> Content Enhancement
  *
  * Version: 2.0
  * Author: jayemar
  */
-class Af_Enhance_Images extends Plugin {
+class Af_Enhance_Content extends Plugin {
 
     private $host;
+
+    // Prepended to content backfilled via extract_body_summary() (as
+    // opposed to a publisher-provided og:description), so it's visually
+    // distinguishable as an auto-assembled summary in the article reader.
+    private const EXTRACTED_SUMMARY_ICON = '🔍';
 
     public function about() {
         return array(
             2.0,
-            "Comprehensive image enhancement: srcset, lazy loading, enclosure types, Open Graph, and enclosure URL upgrading",
+            "Comprehensive article content enhancement: images, Open Graph metadata, markup repair, and content backfill for sparse articles",
             "jayemar"
         );
     }
@@ -47,7 +60,7 @@ class Af_Enhance_Images extends Plugin {
         $host->add_hook($host::HOOK_PREFS_TAB, $this);
 
         // Diagnostic: Confirm plugin initialization (non-verbose for visibility)
-        Debug::log("AF_ENHANCE_IMAGES: Plugin initialized successfully");
+        Debug::log("AF_ENHANCE_CONTENT: Plugin initialized successfully");
     }
 
     // =====================================================================
@@ -65,9 +78,9 @@ class Af_Enhance_Images extends Plugin {
         $upgrade_enclosures = $this->host->get($this, "upgrade_enclosures", false);
         ?>
         <div dojoType="dijit.layout.AccordionPane"
-            title="<i class='material-icons'>image</i> <?= __('Image Enhancement') ?>">
+            title="<i class='material-icons'>auto_fix_high</i> <?= __('Content Enhancement') ?>">
 
-            <form dojoType="dijit.form.Form">
+            <form dojoType="dijit.form.Form" style="overflow-y: auto; padding-right: 8px;">
 
                 <?= \Controls\pluginhandler_tags($this, "save") ?>
 
@@ -82,85 +95,76 @@ class Af_Enhance_Images extends Plugin {
                 </script>
 
                 <fieldset>
-                    <legend><?= __('Inline Image Enhancement') ?></legend>
+                    <legend style="font-weight: bold; font-size: 1.05em;"><?= __('Inline Image Enhancement') ?></legend>
                     <label class="checkbox">
                         <input dojoType="dijit.form.CheckBox" type="checkbox" name="inline_enhancement" value="1"
                             <?= $inline_enhancement ? 'checked' : '' ?>>
                         <?= __('Enhance inline images (srcset, lazy loading)') ?>
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Extract highest resolution from srcset, convert data-src to src, remove loading=lazy') ?>
+                        <?= __('Works on &lt;img&gt; tags already present in the RSS content - no article page fetch required. When an image has a srcset attribute, replaces src with the highest-resolution URL listed so the display image is not needlessly downscaled. Also converts data-src to src (some feeds ship lazy-loading markup meant for a live webpage, which never fires in an RSS reader and leaves the image blank) and removes loading="lazy" so images render immediately instead of waiting on a scroll-triggered load that TT-RSS never triggers.') ?>
                     </p>
                 </fieldset>
 
                 <fieldset>
-                    <legend><?= __('Tracking Pixel Removal') ?></legend>
+                    <legend style="font-weight: bold; font-size: 1.05em;"><?= __('Tracking Pixel Removal') ?></legend>
                     <label class="checkbox">
                         <input dojoType="dijit.form.CheckBox" type="checkbox" name="strip_tracking_pixels" value="1"
                             <?= $strip_tracking_pixels ? 'checked' : '' ?>>
                         <?= __('Strip tracking pixels from article content') ?>
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Removes invisible images declared 2px or smaller in both width and height, commonly used to detect when an article was opened') ?>
+                        <?= __('Removes &lt;img&gt; tags declared 2px or smaller in both width and height. Publishers embed these invisible "beacon" images to detect when and how many times an article was opened; since TT-RSS caches images, loading one silently reports back to the tracker every time you view the article. Purely a content-cleanup step - runs on RSS content already in hand, no article page fetch involved.') ?>
                     </p>
                 </fieldset>
 
                 <fieldset>
-                    <legend><?= __('Enclosure Type Fixing') ?></legend>
+                    <legend style="font-weight: bold; font-size: 1.05em;"><?= __('Enclosure Type Fixing') ?></legend>
                     <label class="checkbox">
                         <input dojoType="dijit.form.CheckBox" type="checkbox" name="fix_enclosure_type" value="1"
                             <?= $fix_enclosure_type ? 'checked' : '' ?>>
                         <?= __('Fix empty enclosure content types') ?>
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Infer MIME type from URL extension when content_type is empty') ?>
+                        <?= __('Some feeds publish image enclosures with an empty or missing MIME type. TT-RSS and API clients use the MIME type to decide whether to render an enclosure as an image thumbnail at all, so an empty type can make an otherwise-valid image silently fail to display. This infers the type (image/jpeg, image/png, etc.) from the file extension in the enclosure URL when the feed did not supply one.') ?>
                     </p>
                 </fieldset>
 
                 <fieldset>
-                    <legend><?= __('Open Graph Metadata') ?></legend>
+                    <legend style="font-weight: bold; font-size: 1.05em;"><?= __('Open Graph Metadata') ?></legend>
                     <label class="checkbox">
                         <input dojoType="dijit.form.CheckBox" type="checkbox" name="extract_og" value="1"
                             <?= $extract_og ? 'checked' : '' ?>>
                         <?= __('Extract Open Graph metadata') ?>
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Add og:image as thumbnail enclosure, set author from og:article:author. Fetches article page only when RSS feed has no image enclosures.') ?>
+                        <?= __('Open Graph (og:*) tags are metadata most web pages embed in their &lt;head&gt; for link previews (the image/title/description shown when a link is shared on social media). This fetches the article\'s own web page - not just the RSS feed entry - and uses that metadata to add a thumbnail image and fill in a missing author when the feed itself did not provide them. The fetch only happens when it is actually needed: when the RSS entry has no usable image, or its content is thin/missing (common on link-aggregator feeds like Hacker News, which publish little more than a title and a link). Feeds that already ship full images and content are left alone, avoiding a pointless extra request per article.') ?>
                     </p>
 
                     <label class="checkbox" style="margin-left: 24px;">
                         <input dojoType="dijit.form.CheckBox" type="checkbox" name="enhance_content" value="1"
                             <?= $enhance_content ? 'checked' : '' ?>>
-                        <?= __('Use og:description for short content') ?>
+                        <?= __('Backfill short content from og:description, falling back to extracted article text') ?>
                     </label>
+                    <p class="help-text" style="margin-left: 48px; color: #666;">
+                        <?= __('Only takes effect together with "Extract Open Graph metadata" above, since it reuses the same page fetch rather than fetching a second time. When an article\'s stored content is shorter than what\'s available, this prepends the page\'s og:description (its social-preview summary) to backfill it. Many sites (Wikipedia is a common example) don\'t publish an og:description at all - for those, this falls back to a simple extraction of the first substantial paragraph(s) of real article text directly from the page\'s own HTML, so link-only feed entries still get a usable summary instead of staying blank. Extracted-text summaries are prefixed with 🔍 so you can tell them apart from the publisher\'s own og:description.') ?>
+                    </p>
                 </fieldset>
 
                 <fieldset>
-                    <legend><?= __('Enclosure URL Upgrading') ?></legend>
+                    <legend style="font-weight: bold; font-size: 1.05em;"><?= __('Enclosure URL Upgrading') ?></legend>
                     <label class="checkbox">
                         <input dojoType="dijit.form.CheckBox" type="checkbox" name="upgrade_enclosures" value="1"
                             <?= $upgrade_enclosures ? 'checked' : '' ?>>
                         <?= __('Upgrade enclosure URLs from article page') ?>
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Fetches article page when enclosures exist and extracts high-resolution image URLs from srcset to replace low-res enclosures') ?>
+                        <?= __('Many feeds publish a low-resolution enclosure image (a small thumbnail meant for feed-reader lists) even though a much larger version of the same photo is available on the article\'s own page via its srcset. When an article has enclosures, this fetches the article page, matches each enclosure to the corresponding image on the page by filename, and replaces the enclosure URL with the highest-resolution version found - so the image you see is not artificially capped to thumbnail size.') ?>
                     </p>
                 </fieldset>
 
-                <hr>
-
                 <?= \Controls\submit_tag(__("Save")) ?>
             </form>
-
-            <hr>
-            <h3><?= __('Feature Summary') ?></h3>
-            <ul>
-                <li><strong>Inline Enhancement:</strong> <?= __('Processes <img> tags in article content') ?></li>
-                <li><strong>Tracking Pixel Removal:</strong> <?= __('Removes invisible beacon images used for open-tracking') ?></li>
-                <li><strong>Type Fixing:</strong> <?= __('Fixes empty MIME types in enclosures') ?></li>
-                <li><strong>OG Extraction:</strong> <?= __('Extracts og:image, author, description from article pages') ?></li>
-                <li><strong>Enclosure Upgrading:</strong> <?= __('Replaces low-res enclosure URLs with high-res from article srcset') ?></li>
-            </ul>
         </div>
         <?php
     }
@@ -197,7 +201,7 @@ class Af_Enhance_Images extends Plugin {
 
     public function hook_article_filter($article) {
         // Diagnostic: Confirm hook is being called (non-verbose for visibility)
-        Debug::log("AF_ENHANCE_IMAGES: hook_article_filter() called for: " .
+        Debug::log("AF_ENHANCE_CONTENT: hook_article_filter() called for: " .
             ($article['title'] ?? 'unknown'));
 
         // Captured before Feature 1 runs: enhance_inline_images() unconditionally
@@ -225,11 +229,18 @@ class Af_Enhance_Images extends Plugin {
         // Determine if we need to fetch the article page
         $should_fetch = false;
 
-        // Fetch if OG extraction enabled and article lacks images (both enclosures and inline).
-        // Uses article_has_images() so feeds with full inline content (NPR, The Verge) do NOT
-        // get an og:thumbnail - that would duplicate the inline images already in the content.
-        $article_for_has_images_check = ['content' => $original_content, 'enclosures' => $article['enclosures'] ?? []];
-        if ($extract_og && !$this->article_has_images($article_for_has_images_check)) {
+        // Fetch if OG extraction enabled and the article lacks images OR lacks
+        // real content. These are independent conditions, checked with OR, not
+        // AND: article_has_images() alone used to gate this (so feeds with
+        // full inline content, e.g. NPR, The Verge, don't get a duplicate
+        // og:thumbnail) but that meant an article with an image and no body
+        // text (common on link-aggregator feeds like Hacker News) never got
+        // fetched for og:description/content backfill either, since the image
+        // check alone blocked it. Content-length is what actually determines
+        // whether backfill is needed, independent of images.
+        $article_for_fetch_check = ['content' => $original_content, 'enclosures' => $article['enclosures'] ?? []];
+        if ($extract_og && (!$this->article_has_images($article_for_fetch_check)
+                             || !$this->article_has_meaningful_content($article_for_fetch_check))) {
             $should_fetch = true;
         }
 
@@ -237,14 +248,14 @@ class Af_Enhance_Images extends Plugin {
         if ($upgrade_enclosures && !empty($article['enclosures'])) {
             $should_fetch = true;
             // Diagnostic: Confirm enclosure upgrading decision (non-verbose for visibility)
-            Debug::log("AF_ENHANCE_IMAGES: Will attempt to upgrade " .
+            Debug::log("AF_ENHANCE_CONTENT: Will attempt to upgrade " .
                 count($article['enclosures']) . " enclosure(s)");
         }
 
         if ($should_fetch) {
             $url = $article['link'] ?? '';
             if (!empty($url)) {
-                Debug::log("af_enhance_images: Fetching article page: $url", Debug::LOG_VERBOSE);
+                Debug::log("af_enhance_content: Fetching article page: $url", Debug::LOG_VERBOSE);
                 $html = $this->fetch_article_page($url);
 
                 if ($html) {
@@ -254,9 +265,12 @@ class Af_Enhance_Images extends Plugin {
                         $og_data = $this->extract_og_metadata($html);
                     }
 
-                    // Apply OG metadata if extraction is enabled
-                    if ($extract_og && $og_data) {
-                        $article = $this->apply_og_metadata($article, $og_data);
+                    // Apply OG metadata if extraction is enabled. Called even
+                    // when $og_data is null (page has no OG tags at all,
+                    // e.g. Wikipedia) so the body-text extraction fallback
+                    // inside apply_og_metadata() still gets a chance to run.
+                    if ($extract_og) {
+                        $article = $this->apply_og_metadata($article, $og_data ?? [], $html);
                     }
 
                     // Upgrade enclosure URLs if enabled
@@ -295,7 +309,7 @@ class Af_Enhance_Images extends Plugin {
         if (!isset($article['content']) || $article['content'] === null) {
             $article['content'] = '';
 
-            Debug::log("af_enhance_images: Fixed null/missing content for article: " .
+            Debug::log("af_enhance_content: Fixed null/missing content for article: " .
                 ($article['title'] ?? 'unknown'), Debug::LOG_VERBOSE);
         }
 
@@ -402,7 +416,7 @@ class Af_Enhance_Images extends Plugin {
         if (!empty($modifications)) {
             $article['content'] = $content;
             $mod_summary = implode(', ', array_unique($modifications));
-            Debug::log("af_enhance_images: Enhanced article: " .
+            Debug::log("af_enhance_content: Enhanced article: " .
                 ($article['title'] ?? 'unknown') . " - Modifications: $mod_summary",
                 Debug::LOG_VERBOSE);
         }
@@ -668,7 +682,7 @@ class Af_Enhance_Images extends Plugin {
                         $enclosure->type = $inferred_type;
                         $modified = true;
 
-                        Debug::log("af_enhance_images: Set type to '$inferred_type' for: $url",
+                        Debug::log("af_enhance_content: Set type to '$inferred_type' for: $url",
                             Debug::LOG_VERBOSE);
                     }
                 }
@@ -676,7 +690,7 @@ class Af_Enhance_Images extends Plugin {
         }
 
         if ($modified) {
-            Debug::log("af_enhance_images: Fixed enclosure types for article: " .
+            Debug::log("af_enhance_content: Fixed enclosure types for article: " .
                 ($article['title'] ?? 'unknown'), Debug::LOG_VERBOSE);
         }
 
@@ -698,12 +712,12 @@ class Af_Enhance_Images extends Plugin {
         $response = UrlHelper::fetch($options);
 
         if (!$response) {
-            Debug::log("af_enhance_images: Failed to fetch: $url (may be blocked by site)", Debug::LOG_VERBOSE);
+            Debug::log("af_enhance_content: Failed to fetch: $url (may be blocked by site)", Debug::LOG_VERBOSE);
             return null;
         }
 
         $content_length = strlen($response);
-        Debug::log("af_enhance_images: Successfully fetched $content_length bytes from: $url", Debug::LOG_VERBOSE);
+        Debug::log("af_enhance_content: Successfully fetched $content_length bytes from: $url", Debug::LOG_VERBOSE);
 
         return $response;
     }
@@ -822,7 +836,56 @@ class Af_Enhance_Images extends Plugin {
         return $og_data;
     }
 
-    private function apply_og_metadata($article, $og_data) {
+    // Fallback for pages with no og:description (or no OG tags at all).
+    // Hand-rolled DOMDocument heuristic, not a full Readability port: strips
+    // obvious non-article chrome, prefers an <article>/<main> container if
+    // present, and takes the first one or two substantial <p> elements as
+    // the summary. Reuses the already-fetched page HTML - no second fetch.
+    private function extract_body_summary($html) {
+        if (empty($html)) {
+            return null;
+        }
+
+        $doc = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $loaded = $doc->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+        libxml_clear_errors();
+
+        if (!$loaded) {
+            return null;
+        }
+
+        $xpath = new DOMXPath($doc);
+
+        foreach (['script', 'style', 'nav', 'header', 'footer', 'aside', 'form', 'iframe'] as $tag) {
+            foreach (iterator_to_array($doc->getElementsByTagName($tag)) as $node) {
+                $node->parentNode->removeChild($node);
+            }
+        }
+
+        $container = $xpath->query('//article')->item(0)
+            ?? $xpath->query('//main')->item(0)
+            ?? $doc;
+
+        $paragraphs = [];
+        foreach ($container->getElementsByTagName('p') as $p) {
+            $text = trim(preg_replace('/\s+/', ' ', $p->textContent));
+            if (strlen($text) >= 60) {
+                $paragraphs[] = $text;
+            }
+            if (count($paragraphs) >= 2) {
+                break;
+            }
+        }
+
+        if (empty($paragraphs)) {
+            return null;
+        }
+
+        return implode(' ', $paragraphs);
+    }
+
+    private function apply_og_metadata($article, $og_data, $html = '') {
         // Add og:image as enclosure if we don't have image enclosures
         if (!empty($og_data['image'])) {
             $has_image_enclosure = false;
@@ -854,32 +917,54 @@ class Af_Enhance_Images extends Plugin {
                 }
                 $article['enclosures'][] = $enclosure;
 
-                Debug::log("af_enhance_images: Added og:image as enclosure: " . $og_data['image'], Debug::LOG_VERBOSE);
+                Debug::log("af_enhance_content: Added og:image as enclosure: " . $og_data['image'], Debug::LOG_VERBOSE);
             }
         }
 
         // Set author if missing
         if (empty($article['author']) && !empty($og_data['author'])) {
             $article['author'] = $og_data['author'];
-            Debug::log("af_enhance_images: Set author from og:article:author: " . $og_data['author'], Debug::LOG_VERBOSE);
+            Debug::log("af_enhance_content: Set author from og:article:author: " . $og_data['author'], Debug::LOG_VERBOSE);
         }
 
-        // Enhance content with og:description if configured and content is shorter
+        // Enhance content with og:description if configured and content is
+        // shorter. Falls back to a hand-rolled body-text extraction of the
+        // already-fetched page when there's no og:description at all (some
+        // sites, e.g. Wikipedia, ship no OG tags whatsoever) - no second
+        // fetch, since $html is the same page fetched for OG extraction.
         $enhance_content = $this->host->get($this, "enhance_content", false);
-        if ($enhance_content && !empty($og_data['description'])) {
-            $content_length = strlen(strip_tags($article['content'] ?? ''));
-            $og_desc_length = strlen($og_data['description']);
+        if ($enhance_content) {
+            $summary = $og_data['description'] ?? '';
+            $summary_source = 'og:description';
 
-            if ($og_desc_length > $content_length) {
-                $article['content'] = '<p>' . htmlspecialchars($og_data['description']) . '</p>' .
-                                      '<hr>' . ($article['content'] ?? '');
-                Debug::log("af_enhance_images: Enhanced content with og:description", Debug::LOG_VERBOSE);
+            if (empty($summary) && !empty($html)) {
+                $extracted = $this->extract_body_summary($html);
+                if (!empty($extracted)) {
+                    $summary = $extracted;
+                    $summary_source = 'extracted body text';
+                }
+            }
+
+            if (!empty($summary)) {
+                $content_length = strlen(strip_tags($article['content'] ?? ''));
+                $summary_length = strlen($summary);
+
+                if ($summary_length > $content_length) {
+                    // Mark extracted-text summaries (as opposed to the
+                    // publisher's own og:description) with a leading icon,
+                    // so it's visually obvious the summary was assembled
+                    // from raw page text rather than provided by the site.
+                    $prefix = $summary_source === 'extracted body text' ? self::EXTRACTED_SUMMARY_ICON . ' ' : '';
+                    $article['content'] = '<p>' . $prefix . htmlspecialchars($summary) . '</p>' .
+                                          '<hr>' . ($article['content'] ?? '');
+                    Debug::log("af_enhance_content: Enhanced content with $summary_source", Debug::LOG_VERBOSE);
+                }
             }
         }
 
         // Log tags for potential future use
         if (!empty($og_data['tags'])) {
-            Debug::log("af_enhance_images: Found tags: " . implode(', ', $og_data['tags']), Debug::LOG_VERBOSE);
+            Debug::log("af_enhance_content: Found tags: " . implode(', ', $og_data['tags']), Debug::LOG_VERBOSE);
         }
 
         return $article;
@@ -898,7 +983,7 @@ class Af_Enhance_Images extends Plugin {
         $page_images = $this->extract_page_images($html);
 
         if (empty($page_images)) {
-            Debug::log("af_enhance_images: No images with srcset found on article page", Debug::LOG_VERBOSE);
+            Debug::log("af_enhance_content: No images with srcset found on article page", Debug::LOG_VERBOSE);
         }
 
         $upgraded_count = 0;
@@ -927,19 +1012,19 @@ class Af_Enhance_Images extends Plugin {
             if (!$upgraded_url && !empty($og_data['image'])) {
                 if ($this->is_same_image_different_size($enclosure_url, $og_data['image'])) {
                     $upgraded_url = $og_data['image'];
-                    Debug::log("af_enhance_images: Using og:image as fallback for enclosure upgrade", Debug::LOG_VERBOSE);
+                    Debug::log("af_enhance_content: Using og:image as fallback for enclosure upgrade", Debug::LOG_VERBOSE);
                 }
             }
 
             if ($upgraded_url && $upgraded_url !== $enclosure_url) {
-                Debug::log("af_enhance_images: Upgrading enclosure URL:\n  FROM: $enclosure_url\n  TO: $upgraded_url", Debug::LOG_VERBOSE);
+                Debug::log("af_enhance_content: Upgrading enclosure URL:\n  FROM: $enclosure_url\n  TO: $upgraded_url", Debug::LOG_VERBOSE);
                 $enclosure->link = $upgraded_url;
                 $upgraded_count++;
             }
         }
 
         if ($upgraded_count > 0) {
-            Debug::log("af_enhance_images: Upgraded $upgraded_count enclosure(s) for article: " .
+            Debug::log("af_enhance_content: Upgraded $upgraded_count enclosure(s) for article: " .
                 ($article['title'] ?? 'unknown'), Debug::LOG_VERBOSE);
         }
 
@@ -982,12 +1067,12 @@ class Af_Enhance_Images extends Plugin {
 
     private function match_and_upgrade_url($enclosure_url, $page_images) {
         // Diagnostic: Log URL being matched (non-verbose for visibility)
-        Debug::log("AF_ENHANCE_IMAGES: Matching enclosure: " . $enclosure_url);
+        Debug::log("AF_ENHANCE_CONTENT: Matching enclosure: " . $enclosure_url);
 
         // Normalize the enclosure URL for comparison
         $enc_path = parse_url($enclosure_url, PHP_URL_PATH);
         if (!$enc_path) {
-            Debug::log("AF_ENHANCE_IMAGES: No path found in enclosure URL");
+            Debug::log("AF_ENHANCE_CONTENT: No path found in enclosure URL");
             return null;
         }
 
@@ -1018,7 +1103,7 @@ class Af_Enhance_Images extends Plugin {
 
                     // Return the highest res URL if available, otherwise src
                     $upgraded = $img['highest_res'] ?: $img['src'];
-                    Debug::log("AF_ENHANCE_IMAGES: Found upgrade (filename match): " . $upgraded);
+                    Debug::log("AF_ENHANCE_CONTENT: Found upgrade (filename match): " . $upgraded);
                     return $upgraded;
                 }
 
@@ -1026,14 +1111,14 @@ class Af_Enhance_Images extends Plugin {
                 // For example: /ws/240/image.jpg should match /ws/1024/image.jpg
                 if ($this->is_same_image_different_size($enclosure_url, $candidate_url)) {
                     $upgraded = $img['highest_res'] ?: $img['src'];
-                    Debug::log("AF_ENHANCE_IMAGES: Found upgrade (same image, different size): " . $upgraded);
+                    Debug::log("AF_ENHANCE_CONTENT: Found upgrade (same image, different size): " . $upgraded);
                     return $upgraded;
                 }
             }
         }
 
         // Diagnostic: No match found (non-verbose for visibility)
-        Debug::log("AF_ENHANCE_IMAGES: No upgrade found for: " . $enclosure_url);
+        Debug::log("AF_ENHANCE_CONTENT: No upgrade found for: " . $enclosure_url);
         return null;
     }
 
@@ -1109,6 +1194,17 @@ class Af_Enhance_Images extends Plugin {
     // =====================================================================
     // HELPER METHODS
     // =====================================================================
+
+    // Threshold below which an article is considered to need a content
+    // backfill (og:description or extracted body text). Deliberately
+    // independent of article_has_images() - see the comment at the
+    // should_fetch check in hook_article_filter().
+    private const MEANINGFUL_CONTENT_MIN_CHARS = 250;
+
+    private function article_has_meaningful_content($article) {
+        $text = trim(strip_tags($article['content'] ?? ''));
+        return strlen($text) >= self::MEANINGFUL_CONTENT_MIN_CHARS;
+    }
 
     private function article_has_images($article) {
         // Check for image enclosures
