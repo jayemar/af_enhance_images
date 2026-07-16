@@ -14,7 +14,9 @@ Comprehensive image enhancement plugin for [Tiny Tiny RSS](https://tt-rss.org/).
 - **Loading Attribute Removal:** Removes `loading="lazy"` for better RSS compatibility
 
 ### 2. Enclosure MIME Type Fixing
-- Infers MIME type from URL extension when `content_type` is empty
+- Infers MIME type from URL extension when `content_type` is empty **or** `image/generic`
+  (some feeds send this placeholder type instead of leaving it empty - both are treated
+  the same way)
 - Supports: JPG, PNG, GIF, WebP, AVIF, SVG, and audio/video formats
 - Critical for feeds like smithsonianmag.com that don't include content_type
 
@@ -100,6 +102,21 @@ The plugin provides granular control over each feature:
   - **Enable this for BBC Mundo and similar feeds**
   - **Note:** Automatically fetches article page when enclosures exist
 
+### Image Caching Default
+- ☑ **Cache images by default for new feeds**
+  - Sets the `ttrss_feeds.cache_images` database column default, so every feed
+    subscribed to from now on gets TT-RSS's native image caching enabled
+    automatically instead of loading images from their original remote URL
+    every time
+  - **Not a per-user preference** - this is a single instance-wide database
+    default, unlike every other setting on this page (TT-RSS has no per-user
+    override for it)
+  - **"Enable caching on all my existing feeds now"** button bulk-applies
+    `cache_images = true` to the calling user's own existing feeds that don't
+    already have it set (scoped to that user only, not every user on the
+    instance)
+  - **Default:** Enabled
+
 ## Use Cases
 
 ### WordPress Blogs with Srcset
@@ -117,6 +134,23 @@ The plugin provides granular control over each feature:
 ### BBC Mundo and Low-Res Enclosures
 **Problem:** Feed provides only 240px thumbnails in enclosures
 **Solution:** Enable "Upgrade enclosure URLs from article page"
+
+### Mastodon Feeds - Images Not Displaying
+**Problem:** Mastodon RSS feeds (`https://<instance>/@<account>.rss`) deliver images as
+`<media:content>` elements, never inline `<img>` tags. TT-RSS correctly converts these
+to enclosures, but if the feed's `always_display_enclosures` is off, clients never
+render them - there's no inline `<img>` for a reader to fall back to.
+**Solution:** Run `af_feed_advisor` (Preferences → Feeds → Feed Advisor → "Analyze All
+Feeds" → "Apply All Recommendations") after adding any Mastodon feed. It detects
+"enclosures only, no inline images" and sets `always_display_enclosures = true`
+automatically.
+
+### Duplicate Images (inline + enclosure)
+**Problem:** Some feeds (e.g. Lemmy) include the same image three ways - inline `<img>`,
+an `<enclosure>` element, and a `<media:content>` element - so it appears 2-3 times per
+article.
+**Solution:** `af_feed_advisor` detects "image enclosures + inline `<img>` tags" and
+recommends disabling enclosure display for that feed, so only the inline copy renders.
 
 ## Performance
 
@@ -244,6 +278,30 @@ TT-RSS caches article GUIDs. Deleted articles won't re-import if they're still i
 2. Only enable "upgrade_enclosures" for feeds that need it
 3. Monitor feed update times: `docker compose logs updater -f`
 
+### Plugin Settings Silently Ignored
+
+TT-RSS stores plugin settings under the plugin's exact class name (case-sensitive):
+`Af_Enhance_Content`, not `af_enhance_content`. If you ever inspect/edit settings
+directly via SQL rather than the Preferences UI, using the lowercase key will insert a
+row that TT-RSS never reads - the plugin will keep behaving as if nothing changed, with
+no error. Always use the Preferences UI to configure; if verifying manually:
+```bash
+docker compose exec db psql -U postgres -d postgres -c \
+  "SELECT name, content FROM ttrss_plugin_storage WHERE name LIKE '%nhance%';"
+```
+There should be exactly one row: `Af_Enhance_Content`. Delete any lowercase duplicates.
+
+### Known Unresolved: Low-Resolution Enclosures on Some Feeds
+
+At least one feed (RTE.ie) has resisted the "Upgrade enclosure URLs" fix: the RSS feed
+provides 800px images, TT-RSS's database ends up with 500px versions, and the
+much-higher-resolution 1600px og:image is available but never gets picked up - even
+with `upgrade_enclosures` enabled and the URL-matching logic (which strips
+`-500`/`-1600` suffixes to compare base filenames) confirmed sound in isolation. The
+500px transformation appears to happen in TT-RSS core before this plugin's hook ever
+runs, and why the plugin doesn't then correct it back up to the 1600px og:image version
+was never root-caused. Revisit if this recurs on other feeds.
+
 ## Development
 
 ### Project Structure
@@ -278,6 +336,19 @@ af_enhance_content/
 - Comprehensive error handling
 
 ## Technical Details
+
+### `og:thumbnail` Enclosure Marker
+
+When OG extraction adds an `og:image` as a fallback enclosure (feed has inline images
+but no enclosures, or no images at all), the enclosure's `title` is set to
+`'og:thumbnail'`. This originally let a companion plugin, `af_filter_enclosures`,
+distinguish this fallback thumbnail from real RSS enclosures when deciding what to
+strip for feeds with `always_display_enclosures = false` - without the marker, a
+feed's real API-visible thumbnail would get removed along with genuine duplicates.
+`af_filter_enclosures` has since been retired (it existed mainly to work around a
+third-party API client that ignored `always_display_enclosures` entirely; TT-RSS's own
+native API already respects that setting directly). The marker is harmless to leave in
+place, and would matter again if a similar consumer is ever added.
 
 ### URL Matching Algorithm
 
@@ -370,6 +441,12 @@ MIT License - see LICENSE file for details
 - [BBC Mundo Testing Guide](../homelab/ttrss/BBC-MUNDO-TESTING.md)
 
 ## Changelog
+
+### v2.1 (2026-07-15)
+- **NEW:** Image caching default setting - sets the `ttrss_feeds.cache_images`
+  database default for new feeds, plus a bulk-apply button for existing feeds
+- Replaces the standalone `enable-global-cache-settings.sql` script that used
+  to live outside any plugin in the homelab ttrss repo
 
 ### v2.0 (2026-01-20)
 - **NEW:** Enclosure URL upgrading feature

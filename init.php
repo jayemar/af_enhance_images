@@ -10,7 +10,10 @@
  * 4. Enclosure URL upgrading from article pages
  * 5. Article markup repair (escaped anchor tags, ambiguous quoted attributes)
  * 6. Content backfill for articles with little/no body text (og:description,
- *    falling back to extracted article body text)
+ *    falling back to extracted article body text) and little/no hero image
+ *    (og:image, falling back to an image extracted from the article page)
+ * 7. Site-specific handling for feeds whose generic og:* metadata is
+ *    unhelpful (currently: Kagi News)
  *
  * Features:
  * - Rewrite img src to use highest resolution from srcset
@@ -18,7 +21,8 @@
  * - Remove loading="lazy" attributes
  * - Fix empty enclosure content_type
  * - Fetch article pages and extract OG metadata
- * - Add og:image as enclosure
+ * - Add og:image as enclosure, falling back to an image extracted from the
+ *   article page when there's no og:image either
  * - Set author from og:article:author
  * - Backfill missing/short content from og:description, or extracted
  *   article body text when no og:description is available
@@ -26,13 +30,19 @@
  * - Decode double-escaped anchor tags some CMSes emit into their RSS feeds
  * - Re-quote single-quoted HTML attributes containing an apostrophe, which
  *   otherwise breaks TT-RSS core's strip_tags()-based excerpt computation
+ * - Kagi News (kite.kagi.com): fetch a source article from Kagi's own
+ *   "Sources:" list instead of Kagi's page, whose og:image is always the
+ *   same generic site banner regardless of story
+ * - Set the ttrss_feeds.cache_images database default so new feeds get
+ *   image caching on by default, plus a one-time bulk-apply button for
+ *   existing feeds (replaces the old standalone enable-global-cache-settings.sql)
  *
  * Installation:
  * 1. Copy this directory to plugins.local/af_enhance_content/
  * 2. Enable the plugin in Preferences -> Plugins
  * 3. Configure in Preferences -> Feeds -> Content Enhancement
  *
- * Version: 2.0
+ * Version: 2.1
  * Author: jayemar
  */
 class Af_Enhance_Content extends Plugin {
@@ -42,11 +52,22 @@ class Af_Enhance_Content extends Plugin {
     // Prepended to content backfilled via extract_body_summary() (as
     // opposed to a publisher-provided og:description), so it's visually
     // distinguishable as an auto-assembled summary in the article reader.
-    private const EXTRACTED_SUMMARY_ICON = '🔍';
+    private const EXTRACTED_SUMMARY_ICON = '✨';
+
+    // Cap on how many Kagi News "Sources:" links to try fetching before
+    // giving up on finding a real hero image - bounds worst-case fetch
+    // count per article rather than working through the whole list.
+    private const KAGI_SOURCE_FETCH_LIMIT = 3;
+
+    // Appended to the author name when it came from twitter:creator/
+    // twitter:site rather than a real og:article:author byline, so it's
+    // visually clear this is a handle (possibly the publication's own
+    // account, not necessarily the individual writer) rather than a name.
+    private const TWITTER_AUTHOR_ICON = '🐦';
 
     public function about() {
         return array(
-            2.0,
+            2.1,
             "Comprehensive article content enhancement: images, Open Graph metadata, markup repair, and content backfill for sparse articles",
             "jayemar"
         );
@@ -67,6 +88,20 @@ class Af_Enhance_Content extends Plugin {
     // CONFIGURATION UI
     // =====================================================================
 
+    // Reads the live database column default rather than plugin storage,
+    // since the actual authoritative state is the ttrss_feeds schema itself
+    // (an ALTER TABLE ... SET DEFAULT), not anything this plugin stores -
+    // storing a separate flag here could drift out of sync with reality
+    // (e.g. if the default was ever changed outside this plugin).
+    private function cache_images_default_enabled(): bool {
+        $sth = $this->pdo->query(
+            "SELECT column_default FROM information_schema.columns
+             WHERE table_name = 'ttrss_feeds' AND column_name = 'cache_images'"
+        );
+        $row = $sth->fetch();
+        return $row && trim((string)$row['column_default']) === 'true';
+    }
+
     public function hook_prefs_tab($args) {
         if ($args != "prefFeeds") return;
 
@@ -76,6 +111,9 @@ class Af_Enhance_Content extends Plugin {
         $extract_og = $this->host->get($this, "extract_og", true);
         $enhance_content = $this->host->get($this, "enhance_content", false);
         $upgrade_enclosures = $this->host->get($this, "upgrade_enclosures", false);
+        $kagi_source_image = $this->host->get($this, "kagi_source_image", false);
+        $show_wrapper_site_link = $this->host->get($this, "show_wrapper_site_link", false);
+        $cache_images_default = $this->cache_images_default_enabled();
         ?>
         <div dojoType="dijit.layout.AccordionPane"
             title="<i class='material-icons'>auto_fix_high</i> <?= __('Content Enhancement') ?>">
@@ -138,7 +176,7 @@ class Af_Enhance_Content extends Plugin {
                         <?= __('Extract Open Graph metadata') ?>
                     </label>
                     <p class="help-text" style="margin-left: 24px; color: #666;">
-                        <?= __('Open Graph (og:*) tags are metadata most web pages embed in their &lt;head&gt; for link previews (the image/title/description shown when a link is shared on social media). This fetches the article\'s own web page - not just the RSS feed entry - and uses that metadata to add a thumbnail image and fill in a missing author when the feed itself did not provide them. The fetch only happens when it is actually needed: when the RSS entry has no usable image, or its content is thin/missing (common on link-aggregator feeds like Hacker News, which publish little more than a title and a link). Feeds that already ship full images and content are left alone, avoiding a pointless extra request per article.') ?>
+                        <?= __('Open Graph (og:*) tags are metadata most web pages embed in their &lt;head&gt; for link previews (the image/title/description shown when a link is shared on social media). This fetches the article\'s own web page - not just the RSS feed entry - and uses that metadata to add a thumbnail image and fill in a missing author when the feed itself did not provide them. If a page lacks og:* tags for something, several other standard sources are tried in order: plain &lt;meta name="author"&gt;/&lt;meta name="description"&gt; tags, JSON-LD structured data (schema.org Article/BlogPosting, if the page has it), and - for author specifically, as a last resort - a &lt;a rel="author"&gt; link in the page body. If there is still no image, this falls back to the first substantial image found directly in the article\'s own HTML (skipping icons and tracking pixels), so link-aggregator feeds without any thumbnail at all (e.g. Hacker News) still get one. The fetch only happens when it is actually needed: when the RSS entry has no usable image, or its content is thin/missing. Feeds that already ship full images and content are left alone, avoiding a pointless extra request per article.') ?>
                     </p>
 
                     <label class="checkbox" style="margin-left: 24px;">
@@ -147,7 +185,7 @@ class Af_Enhance_Content extends Plugin {
                         <?= __('Backfill short content from og:description, falling back to extracted article text') ?>
                     </label>
                     <p class="help-text" style="margin-left: 48px; color: #666;">
-                        <?= __('Only takes effect together with "Extract Open Graph metadata" above, since it reuses the same page fetch rather than fetching a second time. When an article\'s stored content is shorter than what\'s available, this prepends the page\'s og:description (its social-preview summary) to backfill it. Many sites (Wikipedia is a common example) don\'t publish an og:description at all - for those, this falls back to a simple extraction of the first substantial paragraph(s) of real article text directly from the page\'s own HTML, so link-only feed entries still get a usable summary instead of staying blank. Extracted-text summaries are prefixed with 🔍 so you can tell them apart from the publisher\'s own og:description.') ?>
+                        <?= __('Only takes effect together with "Extract Open Graph metadata" above, since it reuses the same page fetch rather than fetching a second time. When an article\'s stored content is shorter than what\'s available, this prepends the page\'s og:description (its social-preview summary) to backfill it. Many sites (Wikipedia is a common example) don\'t publish an og:description at all - for those, this falls back to a simple extraction of the first substantial paragraph(s) of real article text directly from the page\'s own HTML, so link-only feed entries still get a usable summary instead of staying blank. When either the summary or the thumbnail image was assembled this way (rather than pulled from the publisher\'s own og:description/og:image), ✨ is added to the end of the article title so you can tell at a glance.') ?>
                     </p>
                 </fieldset>
 
@@ -163,10 +201,66 @@ class Af_Enhance_Content extends Plugin {
                     </p>
                 </fieldset>
 
+                <fieldset>
+                    <legend style="font-weight: bold; font-size: 1.05em;"><?= __('Site-Specific Handling') ?></legend>
+                    <label class="checkbox">
+                        <input dojoType="dijit.form.CheckBox" type="checkbox" name="kagi_source_image" value="1"
+                            <?= $kagi_source_image ? 'checked' : '' ?>>
+                        <?= __('Kagi News: use a source article\'s image instead of the generic banner') ?>
+                    </label>
+                    <p class="help-text" style="margin-left: 24px; color: #666;">
+                        <?= __('Only applies to kite.kagi.com articles, and only takes effect together with "Extract Open Graph metadata" above. Kagi News\'s own article page always returns the same site-wide banner image regardless of the story, so for image-less articles this parses the "Sources:" list Kagi already includes in its content and fetches one of the original source articles instead, using its real og:image. Replaces the (otherwise useless) fetch of Kagi\'s own page rather than adding an extra one.') ?>
+                    </p>
+
+                    <label class="checkbox">
+                        <input dojoType="dijit.form.CheckBox" type="checkbox" name="show_wrapper_site_link" value="1"
+                            <?= $show_wrapper_site_link ? 'checked' : '' ?>>
+                        <?= __('Show a link to the linked site\'s other posts on wrapper/aggregator feeds') ?>
+                    </label>
+                    <p class="help-text" style="margin-left: 24px; color: #666;">
+                        <?= __('For "wrapper" feeds where every entry just links out to another site (e.g. Hacker News), adds a small link at the top of the article to the domain it actually links to, plus a link to browse that wrapper site\'s other posts about the same domain. Recognizing that a feed is a wrapper is generic (it compares the feed\'s own site to where the article actually links, so it works for any such feed) - but the browse-page link is only added for wrapper sites this plugin has specifically been taught the URL pattern for. That list is currently just one entry:') ?>
+                    </p>
+                    <p class="help-text" style="margin-left: 24px; color: #666;">
+                        &bull; <?= __('Hacker News (news.ycombinator.com) - links to') ?> <em>https://news.ycombinator.com/from?site=&lt;domain&gt;</em>
+                    </p>
+                    <p class="help-text" style="margin-left: 24px; color: #666;">
+                        <?= __('Adding another wrapper site requires a plugin code change, not just a setting. No extra page fetch is involved either way.') ?>
+                    </p>
+                </fieldset>
+
+                <fieldset>
+                    <legend style="font-weight: bold; font-size: 1.05em;"><?= __('Image Caching Default') ?></legend>
+                    <label class="checkbox">
+                        <input dojoType="dijit.form.CheckBox" type="checkbox" name="cache_images_default" value="1"
+                            <?= $cache_images_default ? 'checked' : '' ?>>
+                        <?= __('Cache images by default for new feeds') ?>
+                    </label>
+                    <p class="help-text" style="margin-left: 24px; color: #666;">
+                        <?= __('Unlike the other settings on this page, this is not a per-user preference - it changes the ttrss_feeds database column default, which applies instance-wide to every feed anyone subscribes to from now on (TT-RSS has no per-user override for this). Without it, cache_images defaults to off for new feeds: their images load directly from the original site every time instead of a local cached copy, which can break if the site blocks hotlinking or later removes the image.') ?>
+                    </p>
+                    <p class="help-text" style="margin-left: 24px;">
+                        <button dojoType="dijit.form.Button" type="button"
+                            onclick="return Plugins.Af_Enhance_Content.applyCacheImagesNow()">
+                            <?= __('Enable caching on all my existing feeds now') ?>
+                        </button>
+                    </p>
+                </fieldset>
+
                 <?= \Controls\submit_tag(__("Save")) ?>
             </form>
         </div>
         <?php
+    }
+
+    public function get_prefs_js() {
+        return "if (!Plugins.Af_Enhance_Content) Plugins.Af_Enhance_Content = {};
+
+        Plugins.Af_Enhance_Content.applyCacheImagesNow = function() {
+            Notify.progress('Enabling image caching...', true);
+            xhr.json('backend.php', {op: 'PluginHandler', plugin: 'af_enhance_content', method: 'applyCacheImagesNow'})
+                .then(function(r) { Notify.info('Enabled image caching on ' + r.updated + ' feed(s).'); });
+            return false;
+        };";
     }
 
     public function csrf_ignore($method) {
@@ -192,7 +286,40 @@ class Af_Enhance_Content extends Plugin {
         $upgrade_enclosures = ($_POST['upgrade_enclosures'] ?? '') === '1';
         $this->host->set($this, "upgrade_enclosures", $upgrade_enclosures);
 
+        $kagi_source_image = ($_POST['kagi_source_image'] ?? '') === '1';
+        $this->host->set($this, "kagi_source_image", $kagi_source_image);
+
+        $show_wrapper_site_link = ($_POST['show_wrapper_site_link'] ?? '') === '1';
+        $this->host->set($this, "show_wrapper_site_link", $show_wrapper_site_link);
+
+        $cache_images_default = ($_POST['cache_images_default'] ?? '') === '1';
+        if ($cache_images_default !== $this->cache_images_default_enabled()) {
+            $value = $cache_images_default ? 'true' : 'false';
+            $this->pdo->exec("ALTER TABLE ttrss_feeds ALTER COLUMN cache_images SET DEFAULT $value");
+        }
+
         echo __('Settings saved.');
+    }
+
+    // Bulk-applies cache_images = true to the current user's existing feeds
+    // that don't already have it set - the one-time backfill half of what
+    // enable-global-cache-settings.sql used to do outside of any plugin.
+    // Scoped to the calling user's own feeds (unlike that script, which
+    // updated every feed for every user unconditionally) to match how every
+    // other per-user action in this codebase is scoped, since this button
+    // lives on a per-user preferences page.
+    public function applyCacheImagesNow() {
+        $uid = $_SESSION['uid'] ?? null;
+        header("Content-Type: application/json");
+        if ($uid === null) {
+            echo json_encode(["error" => "NOT_LOGGED_IN"]);
+            return;
+        }
+        $sth = $this->pdo->prepare(
+            "UPDATE ttrss_feeds SET cache_images = true WHERE owner_uid = ? AND cache_images = false"
+        );
+        $sth->execute([$uid]);
+        echo json_encode(["updated" => $sth->rowCount()]);
     }
 
     // =====================================================================
@@ -255,8 +382,17 @@ class Af_Enhance_Content extends Plugin {
         if ($should_fetch) {
             $url = $article['link'] ?? '';
             if (!empty($url)) {
-                Debug::log("af_enhance_content: Fetching article page: $url", Debug::LOG_VERBOSE);
-                $html = $this->fetch_article_page($url);
+                $html = null;
+                $kagi_source_image = $this->host->get($this, "kagi_source_image", false);
+
+                if ($extract_og && $kagi_source_image && $this->is_kagi_news_url($url)) {
+                    $html = $this->fetch_kagi_source_page($original_content);
+                }
+
+                if (empty($html)) {
+                    Debug::log("af_enhance_content: Fetching article page: $url", Debug::LOG_VERBOSE);
+                    $html = $this->fetch_article_page($url);
+                }
 
                 if ($html) {
                     // Extract OG metadata (needed for both og extraction and enclosure upgrading fallback)
@@ -279,6 +415,12 @@ class Af_Enhance_Content extends Plugin {
                     }
                 }
             }
+        }
+
+        // Wrapper-feed site link (Hacker News, etc.) - no fetch needed,
+        // uses only data already present in $article.
+        if ($this->host->get($this, "show_wrapper_site_link", false)) {
+            $article = $this->add_wrapper_site_link($article);
         }
 
         return $article;
@@ -723,10 +865,113 @@ class Af_Enhance_Content extends Plugin {
     }
 
     // =====================================================================
+    // FEATURE 6: SITE-SPECIFIC HANDLING (Kagi News, wrapper feed links)
+    // =====================================================================
+    //
+    // Wrapper feed detection (below) is fully generic: it compares the
+    // feed's own site_url against the article's link, so it fires for any
+    // link-aggregator/wrapper feed (Hacker News, Lobsters, link-only Reddit
+    // feeds, etc.), not just one named site. Only the URL-building step for
+    // a *specific* wrapper (currently just Hacker News's /from?site= page)
+    // is genuinely site-specific - add more cases there, not in detection.
+    //
+    // Kagi News (kite.kagi.com) articles are AI-generated roundups: the RSS
+    // content already ends with a "Sources:" section (a uniform list of
+    // <a href> links to every original article the story was aggregated
+    // from), but kite.kagi.com's own page always returns the SAME generic
+    // og:image (a site-wide banner, not per-article) regardless of the
+    // story. Rather than fetch kite.kagi.com's page and accept that banner,
+    // this parses the already-present Sources list and fetches one of the
+    // original articles instead, using its real og:image. No extra fetch
+    // vs. the normal path - it replaces the (useless) kite.kagi.com fetch,
+    // it doesn't add to it.
+
+    private function is_kagi_news_url($url) {
+        return parse_url($url, PHP_URL_HOST) === 'kite.kagi.com';
+    }
+
+    private function extract_kagi_source_urls($content) {
+        if (empty($content) || !preg_match('#<h3>\s*Sources:?\s*</h3>\s*<ul>(.*?)</ul>#is', $content, $m)) {
+            return [];
+        }
+
+        preg_match_all('/<a\s+href=[\'"]([^\'"]+)[\'"]/i', $m[1], $links);
+        return $links[1] ?? [];
+    }
+
+    // Tries each Sources link in turn (capped at KAGI_SOURCE_FETCH_LIMIT)
+    // until one both fetches successfully and has a usable og:image.
+    // Returns that page's HTML (so the caller's normal OG-extraction path
+    // runs unchanged against it), or null if none worked.
+    private function fetch_kagi_source_page($content) {
+        $source_urls = $this->extract_kagi_source_urls($content);
+
+        foreach (array_slice($source_urls, 0, self::KAGI_SOURCE_FETCH_LIMIT) as $source_url) {
+            $html = $this->fetch_article_page($source_url);
+            if (empty($html)) {
+                continue;
+            }
+
+            $og = $this->extract_og_metadata($html);
+            if (!empty($og['image'])) {
+                Debug::log("af_enhance_content: Using Kagi source page for image: $source_url", Debug::LOG_VERBOSE);
+                return $html;
+            }
+        }
+
+        return null;
+    }
+
+    // Prepends a small "browse more from this domain" link to content when
+    // the article's feed is a wrapper/aggregator (its own site_url domain
+    // differs from where the article actually links) and we know how to
+    // build a browse-URL for that specific wrapper. No fetch required -
+    // uses only data TT-RSS already passes into HOOK_ARTICLE_FILTER.
+    private function add_wrapper_site_link($article) {
+        $feed_host = $this->normalize_host($article['feed']['site_url'] ?? '');
+        $article_host = $this->normalize_host($article['link'] ?? '');
+
+        if (empty($feed_host) || empty($article_host) || $feed_host === $article_host) {
+            return $article;
+        }
+
+        $browse_url = $this->wrapper_site_browse_url($feed_host, $article_host);
+        if (empty($browse_url)) {
+            return $article;
+        }
+
+        $article['content'] = '<p><small><a href="' . htmlspecialchars($browse_url) . '">' .
+            htmlspecialchars($article_host) . '</a></small></p>' . ($article['content'] ?? '');
+
+        Debug::log("af_enhance_content: Added wrapper site link for $article_host", Debug::LOG_VERBOSE);
+
+        return $article;
+    }
+
+    private function normalize_host($url) {
+        $host = parse_url($url, PHP_URL_HOST);
+        return $host ? preg_replace('/^www\./i', '', strtolower($host)) : null;
+    }
+
+    // Site-specific: builds a "browse more from this domain" URL for
+    // wrapper feeds whose own site offers that kind of per-domain listing.
+    // Add more cases here as they come up - this is the ONLY part of
+    // wrapper-link handling that's specific to a particular site.
+    private function wrapper_site_browse_url($feed_host, $article_host) {
+        if ($feed_host === 'news.ycombinator.com') {
+            return 'https://news.ycombinator.com/from?site=' . rawurlencode($article_host);
+        }
+
+        return null;
+    }
+
+    // =====================================================================
     // FEATURE 4: OPEN GRAPH METADATA EXTRACTION
     // =====================================================================
 
     private function extract_og_metadata($html) {
+        $original_html = $html;
+
         // Only parse the head section for efficiency
         $head_end = stripos($html, '</head>');
         if ($head_end !== false) {
@@ -740,12 +985,28 @@ class Af_Enhance_Content extends Plugin {
             'image_alt' => null,
             'description' => null,
             'author' => null,
+            'author_is_twitter' => false,
             'tags' => [],
             'title' => null,
             'site_name' => null,
             'type' => null,
             'published_time' => null,
         ];
+
+        // Candidates from each source, collected during the single pass
+        // below and reconciled by priority afterward (rather than letting
+        // whichever tag happens to appear first/last in the document win) -
+        // og:article:author is the most specific/authoritative source, then
+        // the plain <meta name="author/description"> tags (the oldest,
+        // most universal HTML convention, predating Open Graph), then
+        // Twitter's fields (often just the site's own handle, not a real
+        // byline - see the RIPE Labs case this was built for).
+        $og_article_author = null;
+        $meta_author = null;
+        $twitter_author = null;
+        $og_description = null;
+        $meta_description = null;
+        $twitter_description = null;
 
         preg_match_all('/<meta\s+[^>]*>/i', $html, $meta_matches);
 
@@ -785,7 +1046,12 @@ class Af_Enhance_Content extends Plugin {
                     $og_data['image_alt'] = html_entity_decode($content);
                     break;
                 case 'og:description':
-                    $og_data['description'] = html_entity_decode($content);
+                    $og_description = html_entity_decode($content);
+                    break;
+                case 'description':
+                    if (empty($meta_description)) {
+                        $meta_description = html_entity_decode($content);
+                    }
                     break;
                 case 'og:title':
                     $og_data['title'] = html_entity_decode($content);
@@ -798,7 +1064,12 @@ class Af_Enhance_Content extends Plugin {
                     break;
                 case 'og:article:author':
                 case 'article:author':
-                    $og_data['author'] = html_entity_decode($content);
+                    $og_article_author = html_entity_decode($content);
+                    break;
+                case 'author':
+                    if (empty($meta_author)) {
+                        $meta_author = html_entity_decode($content);
+                    }
                     break;
                 case 'og:article:tag':
                 case 'article:tag':
@@ -814,16 +1085,77 @@ class Af_Enhance_Content extends Plugin {
                     }
                     break;
                 case 'twitter:description':
-                    if (empty($og_data['description'])) {
-                        $og_data['description'] = html_entity_decode($content);
+                    if (empty($twitter_description)) {
+                        $twitter_description = html_entity_decode($content);
                     }
                     break;
                 case 'twitter:creator':
                 case 'twitter:site':
-                    if (empty($og_data['author'])) {
-                        $og_data['author'] = html_entity_decode($content);
+                    if (empty($twitter_author)) {
+                        $twitter_author = html_entity_decode($content);
                     }
                     break;
+            }
+        }
+
+        // <link rel="image_src"> is an older, pre-Open-Graph convention for
+        // a representative image - only used if og:image/twitter:image
+        // didn't already supply one.
+        if (empty($og_data['image'])
+                && preg_match('/<link\s+[^>]*rel\s*=\s*["\']image_src["\'][^>]*>/i', $html, $link_tag)
+                && preg_match('/href\s*=\s*["\']([^"\']+)["\']/i', $link_tag[0], $href)) {
+            $og_data['image'] = html_entity_decode($href[1]);
+        }
+
+        // Reconcile author: og:article:author > meta author > twitter
+        // handle. Order-independent - whichever source exists wins by
+        // priority, regardless of which tag appeared first in the HTML.
+        if (!empty($og_article_author)) {
+            $og_data['author'] = $og_article_author;
+            $og_data['author_is_twitter'] = false;
+        } elseif (!empty($meta_author)) {
+            $og_data['author'] = $meta_author;
+            $og_data['author_is_twitter'] = false;
+        } elseif (!empty($twitter_author)) {
+            $og_data['author'] = $twitter_author;
+            $og_data['author_is_twitter'] = true;
+        }
+
+        // Reconcile description with the same priority idea: og:description
+        // > meta description > twitter:description.
+        if (!empty($og_description)) {
+            $og_data['description'] = $og_description;
+        } elseif (!empty($meta_description)) {
+            $og_data['description'] = $meta_description;
+        } elseif (!empty($twitter_description)) {
+            $og_data['description'] = $twitter_description;
+        }
+
+        // Body-level fallbacks (JSON-LD, then <a rel="author">) - only
+        // consulted for whatever the head tags above didn't supply. Uses
+        // the original, untruncated HTML since these aren't confined to
+        // <head>.
+        if (empty($og_data['author']) || empty($og_data['description']) || empty($og_data['image'])) {
+            $json_ld = $this->extract_json_ld($original_html);
+            if ($json_ld) {
+                if (empty($og_data['author']) && !empty($json_ld['author'])) {
+                    $og_data['author'] = $json_ld['author'];
+                    $og_data['author_is_twitter'] = false;
+                }
+                if (empty($og_data['description']) && !empty($json_ld['description'])) {
+                    $og_data['description'] = $json_ld['description'];
+                }
+                if (empty($og_data['image']) && !empty($json_ld['image'])) {
+                    $og_data['image'] = $json_ld['image'];
+                }
+            }
+        }
+
+        if (empty($og_data['author'])) {
+            $rel_author = $this->extract_rel_author($original_html);
+            if (!empty($rel_author)) {
+                $og_data['author'] = $rel_author;
+                $og_data['author_is_twitter'] = false;
             }
         }
 
@@ -834,6 +1166,100 @@ class Af_Enhance_Content extends Plugin {
         }
 
         return $og_data;
+    }
+
+    // Scans for a schema.org Article/BlogPosting/NewsArticle/TechArticle
+    // JSON-LD block and pulls author name, description, and image from it.
+    // Handles a single object, an array of objects, or an @graph wrapper -
+    // the common shapes seen in the wild. Defensive throughout: malformed
+    // or unexpected JSON just falls through to null rather than erroring,
+    // since this is a best-effort fallback, not a strict parser.
+    private function extract_json_ld($html) {
+        if (empty($html) || !preg_match_all(
+                '#<script[^>]+type\s*=\s*["\']application/ld\+json["\'][^>]*>(.*?)</script>#is', $html, $matches)) {
+            return null;
+        }
+
+        foreach ($matches[1] as $json_text) {
+            $data = json_decode(trim($json_text), true);
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $candidates = $data['@graph'] ?? (array_is_list($data) ? $data : [$data]);
+
+            foreach ($candidates as $candidate) {
+                if (!is_array($candidate)) {
+                    continue;
+                }
+
+                $types = $candidate['@type'] ?? [];
+                $types = is_array($types) ? $types : [$types];
+                $is_article = !empty(array_intersect(
+                    array_map('strtolower', $types),
+                    ['article', 'newsarticle', 'blogposting', 'techarticle']
+                ));
+
+                if (!$is_article) {
+                    continue;
+                }
+
+                $author = $candidate['author'] ?? null;
+                $author_name = null;
+                if (is_string($author)) {
+                    $author_name = $author;
+                } elseif (is_array($author)) {
+                    $first_author = array_is_list($author) ? ($author[0] ?? null) : $author;
+                    $author_name = is_array($first_author) ? ($first_author['name'] ?? null) : $first_author;
+                }
+
+                $image = $candidate['image'] ?? null;
+                if (is_array($image)) {
+                    $image = array_is_list($image) ? ($image[0] ?? null) : ($image['url'] ?? null);
+                    if (is_array($image)) {
+                        $image = $image['url'] ?? null;
+                    }
+                }
+
+                return [
+                    'author' => is_string($author_name) ? $author_name : null,
+                    'description' => is_string($candidate['description'] ?? null) ? $candidate['description'] : null,
+                    'image' => is_string($image) ? $image : null,
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    // <a rel="author"> is a standard HTML link-type for attributing a page
+    // to its author - common on Blogger/WordPress-style sites even when no
+    // machine-readable author metadata exists in <head> at all. rel is a
+    // space-separated token list (e.g. "author nofollow"), so this matches
+    // "author" as a whole token, not a substring.
+    private function extract_rel_author($html) {
+        if (empty($html)) {
+            return null;
+        }
+
+        $doc = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $loaded = $doc->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+        libxml_clear_errors();
+
+        if (!$loaded) {
+            return null;
+        }
+
+        $xpath = new DOMXPath($doc);
+        $nodes = $xpath->query("//a[contains(concat(' ', normalize-space(@rel), ' '), ' author ')]");
+
+        if ($nodes->length === 0) {
+            return null;
+        }
+
+        $text = trim(preg_replace('/\s+/', ' ', $nodes->item(0)->textContent));
+        return $text !== '' ? $text : null;
     }
 
     // Fallback for pages with no og:description (or no OG tags at all).
@@ -885,9 +1311,110 @@ class Af_Enhance_Content extends Plugin {
         return implode(' ', $paragraphs);
     }
 
+    // Fallback for pages with no og:image (or no OG tags at all). Same
+    // container-detection as extract_body_summary(): prefers an
+    // <article>/<main> region, then takes the first <img> that isn't
+    // icon-sized or a tracking pixel (reusing the same filters
+    // article_has_images() uses), resolved to an absolute URL against the
+    // article's own page.
+    private function extract_body_image($html, $base_url) {
+        if (empty($html)) {
+            return null;
+        }
+
+        $doc = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $loaded = $doc->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+        libxml_clear_errors();
+
+        if (!$loaded) {
+            return null;
+        }
+
+        $xpath = new DOMXPath($doc);
+
+        foreach (['script', 'style', 'nav', 'header', 'footer', 'aside', 'form', 'iframe'] as $tag) {
+            foreach (iterator_to_array($doc->getElementsByTagName($tag)) as $node) {
+                $node->parentNode->removeChild($node);
+            }
+        }
+
+        $container = $xpath->query('//article')->item(0)
+            ?? $xpath->query('//main')->item(0)
+            ?? $doc;
+
+        foreach ($container->getElementsByTagName('img') as $img) {
+            $img_html = $doc->saveHTML($img);
+            if ($this->is_icon_sized_image($img_html) || $this->has_tracking_pixel_url($img_html)) {
+                continue;
+            }
+
+            $src = $img->getAttribute('src') ?: $img->getAttribute('data-src');
+            if (empty($src)) {
+                continue;
+            }
+
+            return $this->resolve_url($src, $base_url);
+        }
+
+        return null;
+    }
+
+    // Resolves a possibly-relative URL (as commonly found in raw page HTML,
+    // unlike og:image which is required to be absolute per the OG spec)
+    // against a base page URL. Handles protocol-relative (//host/path),
+    // root-relative (/path), and document-relative (path) forms.
+    private function resolve_url($url, $base_url) {
+        $url = trim($url);
+        if ($url === '' || preg_match('#^https?://#i', $url)) {
+            return $url;
+        }
+
+        $base = parse_url($base_url);
+        if (empty($base['scheme']) || empty($base['host'])) {
+            return $url;
+        }
+        $origin = $base['scheme'] . '://' . $base['host'] . (isset($base['port']) ? ':' . $base['port'] : '');
+
+        if (str_starts_with($url, '//')) {
+            return $base['scheme'] . ':' . $url;
+        }
+
+        if (str_starts_with($url, '/')) {
+            return $origin . $url;
+        }
+
+        $base_path = $base['path'] ?? '/';
+        $dir = substr($base_path, 0, strrpos($base_path, '/') + 1);
+        return $origin . $dir . $url;
+    }
+
     private function apply_og_metadata($article, $og_data, $html = '') {
-        // Add og:image as enclosure if we don't have image enclosures
-        if (!empty($og_data['image'])) {
+        // Tracks whether anything in this call was assembled via body-page
+        // extraction rather than pulled from clean og:* metadata, so the
+        // title can be marked with EXTRACTED_SUMMARY_ICON once at the end
+        // regardless of whether it was the image, the summary, or both.
+        $used_extraction = false;
+
+        // Add og:image as enclosure if we don't have image enclosures,
+        // falling back to extracting a real image from the article's own
+        // page when there's no og:image either - mirrors the content
+        // backfill below, since sites lacking og:description often lack
+        // og:image too (e.g. Wikipedia has neither).
+        $image_url = $og_data['image'] ?? null;
+        // og:image is required to be absolute per the OG spec, but not
+        // every site follows that (e.g. arxiv.org emits a root-relative
+        // path) - resolve_url() is a no-op on already-absolute URLs.
+        if (!empty($image_url) && !empty($article['link'])) {
+            $image_url = $this->resolve_url($image_url, $article['link']);
+        }
+        $image_from_extraction = false;
+        if (empty($image_url) && !empty($html) && !empty($article['link'])) {
+            $image_url = $this->extract_body_image($html, $article['link']);
+            $image_from_extraction = !empty($image_url);
+        }
+
+        if (!empty($image_url)) {
             $has_image_enclosure = false;
 
             if (!empty($article['enclosures'])) {
@@ -902,28 +1429,35 @@ class Af_Enhance_Content extends Plugin {
 
             if (!$has_image_enclosure) {
                 $enclosure = new stdClass();
-                $enclosure->link = $og_data['image'];
-                $enclosure->type = $this->infer_mime_type($og_data['image']);
+                $enclosure->link = $image_url;
+                $enclosure->type = $this->infer_mime_type($image_url);
                 $enclosure->length = 0;
-                // Use 'og:thumbnail' as a marker so af_filter_enclosures can distinguish
-                // this fallback thumbnail from regular RSS enclosures. The title field is
-                // available at HOOK_RENDER_ARTICLE_API time but stripped from FreshAPI output.
+                // Marks this as a fallback thumbnail rather than a regular RSS
+                // enclosure, distinguishable at HOOK_RENDER_ARTICLE_API time.
                 $enclosure->title = 'og:thumbnail';
-                $enclosure->width = $og_data['image_width'] ?? 0;
-                $enclosure->height = $og_data['image_height'] ?? 0;
+                $enclosure->width = $image_from_extraction ? 0 : ($og_data['image_width'] ?? 0);
+                $enclosure->height = $image_from_extraction ? 0 : ($og_data['image_height'] ?? 0);
 
                 if (!is_array($article['enclosures'])) {
                     $article['enclosures'] = [];
                 }
                 $article['enclosures'][] = $enclosure;
 
-                Debug::log("af_enhance_content: Added og:image as enclosure: " . $og_data['image'], Debug::LOG_VERBOSE);
+                $image_source_label = $image_from_extraction ? 'extracted image' : 'og:image';
+                Debug::log("af_enhance_content: Added $image_source_label as enclosure: $image_url", Debug::LOG_VERBOSE);
+
+                if ($image_from_extraction) {
+                    $used_extraction = true;
+                }
             }
         }
 
         // Set author if missing
         if (empty($article['author']) && !empty($og_data['author'])) {
             $article['author'] = $og_data['author'];
+            if (!empty($og_data['author_is_twitter'])) {
+                $article['author'] .= ' ' . self::TWITTER_AUTHOR_ICON;
+            }
             Debug::log("af_enhance_content: Set author from og:article:author: " . $og_data['author'], Debug::LOG_VERBOSE);
         }
 
@@ -950,16 +1484,25 @@ class Af_Enhance_Content extends Plugin {
                 $summary_length = strlen($summary);
 
                 if ($summary_length > $content_length) {
-                    // Mark extracted-text summaries (as opposed to the
-                    // publisher's own og:description) with a leading icon,
-                    // so it's visually obvious the summary was assembled
-                    // from raw page text rather than provided by the site.
-                    $prefix = $summary_source === 'extracted body text' ? self::EXTRACTED_SUMMARY_ICON . ' ' : '';
-                    $article['content'] = '<p>' . $prefix . htmlspecialchars($summary) . '</p>' .
+                    $article['content'] = '<p>' . htmlspecialchars($summary) . '</p>' .
                                           '<hr>' . ($article['content'] ?? '');
                     Debug::log("af_enhance_content: Enhanced content with $summary_source", Debug::LOG_VERBOSE);
+
+                    if ($summary_source === 'extracted body text') {
+                        $used_extraction = true;
+                    }
                 }
             }
+        }
+
+        // Mark the title with EXTRACTED_SUMMARY_ICON when either the image
+        // or the summary above was assembled via body-page extraction
+        // rather than pulled from clean og:* metadata, so it's visually
+        // obvious in list and reader views that something was auto-derived
+        // rather than provided by the site.
+        if ($used_extraction && !empty($article['title'])
+                && !str_ends_with($article['title'], self::EXTRACTED_SUMMARY_ICON)) {
+            $article['title'] .= ' ' . self::EXTRACTED_SUMMARY_ICON;
         }
 
         // Log tags for potential future use
