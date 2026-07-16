@@ -188,6 +188,7 @@ class Af_Enhance_Content_OG_Test extends TestCase {
 
         $this->assertNotNull($result);
         $this->assertEquals('@johndoe', $result['author']);
+        $this->assertTrue($result['author_is_twitter']);
     }
 
     public function test_falls_back_to_twitter_site() {
@@ -199,6 +200,33 @@ class Af_Enhance_Content_OG_Test extends TestCase {
 
         $this->assertNotNull($result);
         $this->assertEquals('@example', $result['author']);
+        $this->assertTrue($result['author_is_twitter']);
+    }
+
+    public function test_og_article_author_is_not_marked_as_twitter() {
+        $html = '<html><head>
+            <meta property="og:article:author" content="Jane Smith">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertFalse($result['author_is_twitter']);
+    }
+
+    public function test_og_article_author_overrides_twitter_flag_regardless_of_tag_order() {
+        // twitter:creator appears first in the HTML, so it sets the author
+        // and the twitter flag - but og:article:author appears after it and
+        // must win, resetting the flag since the final author is a real
+        // byline, not a handle.
+        $html = '<html><head>
+            <meta name="twitter:creator" content="@johndoe">
+            <meta property="og:article:author" content="Jane Smith">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Jane Smith', $result['author']);
+        $this->assertFalse($result['author_is_twitter']);
     }
 
     // =====================================================================
@@ -291,6 +319,237 @@ class Af_Enhance_Content_OG_Test extends TestCase {
 
         $this->assertNotNull($result);
         $this->assertEquals('https://example.com/image.jpg', $result['image']);
+    }
+
+    // =====================================================================
+    // PLAIN META AUTHOR/DESCRIPTION TESTS
+    // =====================================================================
+
+    public function test_falls_back_to_meta_author() {
+        $html = '<html><head>
+            <meta name="author" content="Peter Lawrey">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Peter Lawrey', $result['author']);
+        $this->assertFalse($result['author_is_twitter']);
+    }
+
+    public function test_falls_back_to_meta_description() {
+        $html = '<html><head>
+            <meta name="description" content="A plain meta description.">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('A plain meta description.', $result['description']);
+    }
+
+    public function test_og_article_author_takes_priority_over_meta_author_regardless_of_order() {
+        $html = '<html><head>
+            <meta name="author" content="Wrong Name">
+            <meta property="og:article:author" content="Right Name">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Right Name', $result['author']);
+    }
+
+    public function test_meta_author_takes_priority_over_twitter_regardless_of_order() {
+        // twitter:creator appears first in the document, but meta author
+        // should still win - a plain author tag is more likely to be a
+        // real byline than a Twitter handle (which is often just the
+        // publication's own account).
+        $html = '<html><head>
+            <meta name="twitter:creator" content="@pubaccount">
+            <meta name="author" content="Real Author Name">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Real Author Name', $result['author']);
+        $this->assertFalse($result['author_is_twitter']);
+    }
+
+    public function test_meta_description_takes_priority_over_twitter_description() {
+        $html = '<html><head>
+            <meta name="twitter:description" content="Twitter desc">
+            <meta name="description" content="Meta desc">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Meta desc', $result['description']);
+    }
+
+    // =====================================================================
+    // LINK REL=IMAGE_SRC TESTS
+    // =====================================================================
+
+    public function test_falls_back_to_link_image_src() {
+        $html = '<html><head>
+            <link rel="image_src" href="https://example.com/hero.jpg">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('https://example.com/hero.jpg', $result['image']);
+    }
+
+    public function test_og_image_takes_priority_over_link_image_src() {
+        $html = '<html><head>
+            <link rel="image_src" href="https://example.com/should-not-be-used.jpg">
+            <meta property="og:image" content="https://example.com/og-image.jpg">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('https://example.com/og-image.jpg', $result['image']);
+    }
+
+    // =====================================================================
+    // JSON-LD TESTS
+    // =====================================================================
+
+    public function test_extracts_author_description_image_from_json_ld() {
+        $html = '<html><head>
+            <script type="application/ld+json">
+            {
+                "@context": "http://schema.org",
+                "@type": "BlogPosting",
+                "author": {"@type": "Person", "name": "Peter Lawrey"},
+                "description": "A JSON-LD description.",
+                "image": {"@type": "ImageObject", "url": "https://example.com/jsonld.jpg"}
+            }
+            </script>
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Peter Lawrey', $result['author']);
+        $this->assertFalse($result['author_is_twitter']);
+        $this->assertEquals('A JSON-LD description.', $result['description']);
+        $this->assertEquals('https://example.com/jsonld.jpg', $result['image']);
+    }
+
+    public function test_json_ld_handles_string_author() {
+        $html = '<html><head>
+            <script type="application/ld+json">
+            {"@type": "Article", "author": "Jane Smith"}
+            </script>
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Jane Smith', $result['author']);
+    }
+
+    public function test_json_ld_handles_array_of_authors() {
+        $html = '<html><head>
+            <script type="application/ld+json">
+            {"@type": "Article", "author": [{"@type": "Person", "name": "First Author"}, {"@type": "Person", "name": "Second Author"}]}
+            </script>
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('First Author', $result['author']);
+    }
+
+    public function test_json_ld_handles_graph_wrapper() {
+        $html = '<html><head>
+            <script type="application/ld+json">
+            {"@graph": [
+                {"@type": "WebSite", "name": "Not an article"},
+                {"@type": "NewsArticle", "author": {"name": "Graph Author"}}
+            ]}
+            </script>
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Graph Author', $result['author']);
+    }
+
+    public function test_json_ld_ignores_non_article_types() {
+        $html = '<html><head>
+            <script type="application/ld+json">
+            {"@type": "WebSite", "name": "Just a website, not an article"}
+            </script>
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertNull($result);
+    }
+
+    public function test_json_ld_handles_malformed_json_gracefully() {
+        $html = '<html><head>
+            <script type="application/ld+json">
+            { this is not valid json
+            </script>
+            <meta property="og:image" content="https://example.com/fallback.jpg">
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertNotNull($result);
+        $this->assertEquals('https://example.com/fallback.jpg', $result['image'],
+            'Malformed JSON-LD should not prevent extraction of other metadata');
+    }
+
+    public function test_og_article_author_takes_priority_over_json_ld() {
+        $html = '<html><head>
+            <meta property="og:article:author" content="OG Author">
+            <script type="application/ld+json">
+            {"@type": "Article", "author": "JSON-LD Author"}
+            </script>
+        </head></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('OG Author', $result['author']);
+    }
+
+    // =====================================================================
+    // REL=AUTHOR LINK TESTS
+    // =====================================================================
+
+    public function test_falls_back_to_rel_author_link() {
+        $html = '<html><head></head><body>
+            <a href="https://blogger.com/profile/123" rel="author nofollow">Peter Lawrey</a>
+        </body></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Peter Lawrey', $result['author']);
+        $this->assertFalse($result['author_is_twitter']);
+    }
+
+    public function test_rel_author_not_used_when_head_already_has_author() {
+        $html = '<html><head>
+            <meta property="og:article:author" content="Head Author">
+        </head><body>
+            <a href="https://example.com/profile" rel="author">Body Author</a>
+        </body></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertEquals('Head Author', $result['author']);
+    }
+
+    public function test_rel_author_requires_whole_token_match() {
+        // "authorship" contains "author" as a substring but is a different
+        // rel token entirely - must not match.
+        $html = '<html><head></head><body>
+            <a href="https://example.com" rel="authorship">Not Actually An Author</a>
+        </body></html>';
+
+        $result = $this->callPrivateMethod('extract_og_metadata', [$html]);
+
+        $this->assertNull($result);
     }
 
     // =====================================================================
@@ -423,6 +682,26 @@ class Af_Enhance_Content_OG_Test extends TestCase {
         $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data]);
 
         $this->assertEquals('John Doe', $result['author']);
+    }
+
+    public function test_appends_twitter_icon_when_author_from_twitter() {
+        $article = [
+            'title' => 'Test',
+            'content' => 'Content',
+            'author' => ''
+        ];
+
+        $og_data = [
+            'image' => null,
+            'description' => null,
+            'author' => '@johndoe',
+            'author_is_twitter' => true,
+            'tags' => []
+        ];
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data]);
+
+        $this->assertEquals('@johndoe 🐦', $result['author']);
     }
 
     public function test_does_not_overwrite_existing_author() {
@@ -722,8 +1001,8 @@ class Af_Enhance_Content_OG_Test extends TestCase {
 
         $this->assertStringContainsString('This extracted paragraph', $result['content'],
             'Should fall back to extracted body text when og:description is unavailable');
-        $this->assertStringContainsString('🔍', $result['content'],
-            'Extracted-text summaries should be marked with the extraction icon');
+        $this->assertStringEndsWith(' ✨', $result['title'],
+            'Extracted-text summaries should be marked with the extraction icon at the end of the title');
     }
 
     public function test_apply_og_metadata_prefers_og_description_over_extraction() {
@@ -755,8 +1034,8 @@ class Af_Enhance_Content_OG_Test extends TestCase {
 
         $this->assertStringContainsString('og:description that should be used', $result['content']);
         $this->assertStringNotContainsString('should not be used since', $result['content']);
-        $this->assertStringNotContainsString('🔍', $result['content'],
-            'og:description summaries should not carry the extraction icon');
+        $this->assertEquals('Test', $result['title'],
+            'og:description summaries should not add the extraction icon to the title');
     }
 
     public function test_apply_og_metadata_no_fallback_when_extraction_finds_nothing() {
@@ -786,6 +1065,185 @@ class Af_Enhance_Content_OG_Test extends TestCase {
 
         $this->assertEquals('Short original content', $result['content'],
             'Content should be unchanged when neither og:description nor extraction yield anything');
+    }
+
+    // =====================================================================
+    // HERO IMAGE EXTRACTION FALLBACK TESTS
+    // =====================================================================
+
+    public function test_extract_body_image_finds_first_substantial_image() {
+        $html = '<html><body><article>
+            <img src="https://example.com/hero.jpg" width="800" height="600">
+            <p>Some text.</p>
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_image', [$html, 'https://example.com/article']);
+
+        $this->assertEquals('https://example.com/hero.jpg', $result);
+    }
+
+    public function test_extract_body_image_skips_icon_sized_images() {
+        $html = '<html><body><article>
+            <img src="https://example.com/share-icon.png" width="20" height="20">
+            <img src="https://example.com/hero.jpg" width="800" height="600">
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_image', [$html, 'https://example.com/article']);
+
+        $this->assertEquals('https://example.com/hero.jpg', $result);
+    }
+
+    public function test_extract_body_image_skips_tracking_pixels() {
+        $html = '<html><body><article>
+            <img src="https://example.com/tracking/beacon.gif">
+            <img src="https://example.com/hero.jpg" width="800" height="600">
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_image', [$html, 'https://example.com/article']);
+
+        $this->assertEquals('https://example.com/hero.jpg', $result);
+    }
+
+    public function test_extract_body_image_resolves_root_relative_url() {
+        $html = '<html><body><article>
+            <img src="/images/hero.jpg" width="800" height="600">
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_image', [$html, 'https://example.com/blog/article']);
+
+        $this->assertEquals('https://example.com/images/hero.jpg', $result);
+    }
+
+    public function test_extract_body_image_resolves_document_relative_url() {
+        $html = '<html><body><article>
+            <img src="hero.jpg" width="800" height="600">
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_image', [$html, 'https://example.com/blog/article']);
+
+        $this->assertEquals('https://example.com/blog/hero.jpg', $result);
+    }
+
+    public function test_extract_body_image_resolves_protocol_relative_url() {
+        $html = '<html><body><article>
+            <img src="//cdn.example.com/hero.jpg" width="800" height="600">
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_image', [$html, 'https://example.com/article']);
+
+        $this->assertEquals('https://cdn.example.com/hero.jpg', $result);
+    }
+
+    public function test_extract_body_image_returns_null_when_no_substantial_images() {
+        $html = '<html><body><article>
+            <img src="https://example.com/icon.png" width="16" height="16">
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('extract_body_image', [$html, 'https://example.com/article']);
+
+        $this->assertNull($result);
+    }
+
+    public function test_extract_body_image_returns_null_for_empty_html() {
+        $result = $this->callPrivateMethod('extract_body_image', ['', 'https://example.com/article']);
+
+        $this->assertNull($result);
+    }
+
+    public function test_apply_og_metadata_falls_back_to_extracted_image_when_no_og_image() {
+        $this->mockHost->expects($this->any())->method('get')->willReturnCallback(
+            fn($plugin, $key, $default) => $default
+        );
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'Content',
+            'link' => 'https://example.com/article',
+            'enclosures' => []
+        ];
+
+        $og_data = ['image' => null, 'description' => null, 'author' => null, 'tags' => []];
+
+        $html = '<html><body><article>
+            <img src="https://example.com/hero.jpg" width="800" height="600">
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data, $html]);
+
+        $this->assertCount(1, $result['enclosures']);
+        $this->assertEquals('https://example.com/hero.jpg', $result['enclosures'][0]->link);
+        $this->assertEquals('Test ✨', $result['title'],
+            'Title should be marked when the enclosure image came from extraction');
+    }
+
+    public function test_apply_og_metadata_prefers_og_image_over_extraction() {
+        $article = [
+            'title' => 'Test',
+            'content' => 'Content',
+            'link' => 'https://example.com/article',
+            'enclosures' => []
+        ];
+
+        $og_data = [
+            'image' => 'https://example.com/og-image.jpg',
+            'description' => null,
+            'author' => null,
+            'tags' => []
+        ];
+
+        $html = '<html><body><article>
+            <img src="https://example.com/should-not-be-used.jpg" width="800" height="600">
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data, $html]);
+
+        $this->assertEquals('https://example.com/og-image.jpg', $result['enclosures'][0]->link);
+        $this->assertEquals('Test', $result['title'],
+            'Title should not be marked when the image came from og:image, not extraction');
+    }
+
+    public function test_apply_og_metadata_resolves_relative_og_image() {
+        // og:image is required to be absolute per the OG spec, but real
+        // sites (e.g. arxiv.org) don't always follow that.
+        $article = [
+            'title' => 'Test',
+            'content' => 'Content',
+            'link' => 'https://arxiv.org/abs/1234.5678',
+            'enclosures' => []
+        ];
+
+        $og_data = [
+            'image' => '/static/browse/images/logo.png',
+            'description' => null,
+            'author' => null,
+            'tags' => []
+        ];
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data]);
+
+        $this->assertEquals('https://arxiv.org/static/browse/images/logo.png', $result['enclosures'][0]->link,
+            'A root-relative og:image should be resolved against the article link');
+        $this->assertEquals('Test', $result['title'],
+            'Resolving a relative og:image is not extraction, so the title should not be marked');
+    }
+
+    public function test_apply_og_metadata_no_image_fallback_without_article_link() {
+        $article = [
+            'title' => 'Test',
+            'content' => 'Content',
+            'enclosures' => []
+        ];
+
+        $og_data = ['image' => null, 'description' => null, 'author' => null, 'tags' => []];
+
+        $html = '<html><body><article>
+            <img src="https://example.com/hero.jpg" width="800" height="600">
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data, $html]);
+
+        $this->assertEmpty($result['enclosures'],
+            'Should not attempt image extraction without article link to resolve relative URLs against');
     }
 
     // =====================================================================
