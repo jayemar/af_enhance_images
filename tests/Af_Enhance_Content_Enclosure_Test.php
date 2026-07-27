@@ -321,6 +321,35 @@ class Af_Enhance_Content_Enclosure_Test extends TestCase {
             'Should extract smallest density at or above the target width');
     }
 
+    // Substack's substackcdn.com/image/fetch/... CDN URLs embed their own
+    // transform parameters as literal, un-encoded commas *within* the URL
+    // itself (e.g. "$s_!hash!,w_1456,c_limit,f_auto,q_auto:good,
+    // fl_progressive:steep/<encoded original>"). A naive explode(',') used
+    // to shred one such URL into several fragments - the last fragment
+    // still ends in a valid-looking width descriptor, so it got accepted as
+    // a legitimate (but host-less, broken) candidate, which then failed to
+    // fetch entirely once written into <img src> and later resolved by
+    // TT-RSS's own image cache. Confirmed directly against a real
+    // lcamtuf.substack.com feed and this instance's own docker.log.
+    public function test_extract_highest_res_from_srcset_preserves_commas_within_url() {
+        $substack_url_424 = 'https://substackcdn.com/image/fetch/$s_!m7a3!,w_424,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F1f1c6141-cde1-405a-9933-389dec73d0d8_2050x1300.jpeg';
+        $substack_url_1456 = 'https://substackcdn.com/image/fetch/$s_!m7a3!,w_1456,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F1f1c6141-cde1-405a-9933-389dec73d0d8_2050x1300.jpeg';
+
+        $article = [
+            'title' => 'Test',
+            'content' => '<img src="thumb.jpg" srcset="' . $substack_url_424 . ' 424w, ' . $substack_url_1456 . ' 1456w">'
+        ];
+
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturn(true);
+
+        $result = $this->plugin->hook_article_filter($article);
+
+        $this->assertStringContainsString('src="' . $substack_url_1456 . '"', $result['content'],
+            'Should select the full, correct CDN URL rather than a fragment split at an internal comma');
+    }
+
     /**
      * TEST GROUP 5: EDGE CASES
      */

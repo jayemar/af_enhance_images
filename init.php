@@ -327,9 +327,9 @@ class Af_Enhance_Content extends Plugin {
     // =====================================================================
 
     public function hook_article_filter($article) {
-        // Diagnostic: Confirm hook is being called (non-verbose for visibility)
+        // Diagnostic: Confirm hook is being called
         Debug::log("AF_ENHANCE_CONTENT: hook_article_filter() called for: " .
-            ($article['title'] ?? 'unknown'));
+            ($article['title'] ?? 'unknown'), Debug::LOG_VERBOSE);
 
         // Captured before Feature 1 runs: enhance_inline_images() unconditionally
         // strips width/height attributes from every surviving <img> ("allows
@@ -764,8 +764,41 @@ class Af_Enhance_Content extends Plugin {
      */
     private const SRCSET_TARGET_WIDTH = 1600;
 
+    /**
+     * Tokenizes a srcset attribute value into url/descriptor pairs.
+     *
+     * A plain explode(',') is unsafe here: some CDNs (Substack's
+     * substackcdn.com/image/fetch/... transform URLs, for one) embed
+     * literal, un-encoded commas *within* a single srcset entry's own URL,
+     * as part of the URL's own transform-parameter path segment (e.g.
+     * ".../fetch/$s_!hash!,w_1456,c_limit,f_auto,q_auto:good,fl_progressive:
+     * steep/<url-encoded original>"). explode(',') shreds that one entry
+     * into several garbage fragments - the last fragment still ends in a
+     * valid-looking width descriptor ("...jpeg 1456w"), so it was getting
+     * accepted here as a legitimate candidate even though it has no
+     * scheme/host of its own. That fragment then got written into
+     * <img src>, and TT-RSS's own image cache failed to fetch it entirely
+     * once it resolved the now-relative-looking URL against the feed's
+     * site instead of the actual CDN host (confirmed directly against this
+     * plugin's own live docker.log output).
+     *
+     * Tokenizes the same way TT-RSS's own RSSUtils::decode_srcset() does
+     * instead: an entry only ends at a comma immediately followed by
+     * another whitespace-bounded entry, so commas embedded inside a single
+     * URL survive intact.
+     *
+     * @return array<int, array{url: string, size: string}>
+     */
+    private function decode_srcset_entries($srcset) {
+        preg_match_all(
+            '/(?:\A|,)\s*(?P<url>(?!,)\S+(?<!,))\s*(?P<size>\s\d+(?:\.\d+)?[wx]|)\s*(?=,|\Z)/i',
+            $srcset, $matches, PREG_SET_ORDER
+        );
+        return array_map(fn(array $m) => ['url' => trim($m['url']), 'size' => trim($m['size'])], $matches);
+    }
+
     private function extract_highest_res_from_srcset($srcset) {
-        $sources = array_map('trim', explode(',', $srcset));
+        $sources = $this->decode_srcset_entries($srcset);
 
         $best_over_width = PHP_FLOAT_MAX;  // smallest candidate >= target
         $best_over_url = null;
@@ -774,10 +807,12 @@ class Af_Enhance_Content extends Plugin {
         $first_bare_url = null;            // descriptor-less entry (last resort)
 
         foreach ($sources as $source) {
-            if (preg_match('/^(.+?)\s+(\d+(?:\.\d+)?)(w|x)$/i', $source, $match)) {
-                $url = trim($match[1]);
-                $value = floatval($match[2]);
-                $descriptor = strtolower($match[3]);
+            $url = $source['url'];
+            $size = $source['size'];
+
+            if ($size !== '' && preg_match('/^(\d+(?:\.\d+)?)(w|x)$/i', $size, $match)) {
+                $value = floatval($match[1]);
+                $descriptor = strtolower($match[2]);
 
                 $comparable_width = ($descriptor === 'w') ? $value : $value * 1000;
 
@@ -790,9 +825,9 @@ class Af_Enhance_Content extends Plugin {
                     $best_under_width = $comparable_width;
                     $best_under_url = $url;
                 }
-            } elseif (trim($source) !== '') {
+            } elseif ($url !== '') {
                 if ($first_bare_url === null) {
-                    $first_bare_url = trim($source);
+                    $first_bare_url = $url;
                 }
             }
         }
@@ -1609,8 +1644,8 @@ class Af_Enhance_Content extends Plugin {
     }
 
     private function match_and_upgrade_url($enclosure_url, $page_images) {
-        // Diagnostic: Log URL being matched (non-verbose for visibility)
-        Debug::log("AF_ENHANCE_CONTENT: Matching enclosure: " . $enclosure_url);
+        // Diagnostic: Log URL being matched
+        Debug::log("AF_ENHANCE_CONTENT: Matching enclosure: " . $enclosure_url, Debug::LOG_VERBOSE);
 
         // Normalize the enclosure URL for comparison
         $enc_path = parse_url($enclosure_url, PHP_URL_PATH);
