@@ -799,6 +799,33 @@ class Af_Enhance_Content_Inline_Test extends TestCase {
     }
 
     /**
+     * Test 36b: Real-world case: The Verge builds an image's data-caption/
+     * data-portal-copyright attribute by escaping an embedded credit link
+     * the same way KPBS does, but the escaped anchor lives *inside the
+     * attribute value* rather than as body text. Decoding it in place would
+     * splice a literal <a> tag (with its own unescaped quotes) into the
+     * middle of that attribute, corrupting its boundary once TT-RSS's core
+     * DiskCache::rewrite_urls() re-parses the HTML. The escaped anchor must
+     * be left alone when it's inside a tag's own attribute region.
+     */
+    public function test_leaves_escaped_anchor_inside_attribute_value_untouched() {
+        $row = [
+            'headline' => [
+                'title' => 'Test Article',
+                'content' => '<img src="https://example.com/photo.jpg" data-caption="Image: &lt;em&gt;&lt;a href="https://example.com/staff/jane-doe"&gt;Jane Doe&lt;/a&gt;&lt;/em&gt;" />',
+            ],
+        ];
+
+        $result = $this->plugin->hook_render_article_api($row);
+
+        $this->assertStringContainsString(
+            '&lt;a href="https://example.com/staff/jane-doe"&gt;Jane Doe&lt;/a&gt;',
+            $result['content'],
+            'Escaped anchor nested inside an attribute value must be left escaped, not decoded in place'
+        );
+    }
+
+    /**
      * Test 37: getHeadlines' excerpt is built from a content_preview that
      * core computes by truncating RAW content before HOOK_RENDER_ARTICLE_API
      * ever runs, so the anchor-tag fix above never reaches it on its own.

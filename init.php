@@ -54,10 +54,20 @@ class Af_Enhance_Content extends Plugin {
     // distinguishable as an auto-assembled summary in the article reader.
     private const EXTRACTED_SUMMARY_ICON = '✨';
 
-    // Cap on how many Kagi News "Sources:" links to try fetching before
-    // giving up on finding a real hero image - bounds worst-case fetch
-    // count per article rather than working through the whole list.
-    private const KAGI_SOURCE_FETCH_LIMIT = 3;
+    // Default cap on how many (post-skip-list-filtering) Kagi News
+    // "Sources:" links to try fetching before giving up on finding a real
+    // hero image - bounds worst-case fetch count per article rather than
+    // working through the whole list. User-configurable via the
+    // kagi_source_fetch_limit setting; this is only the fallback default.
+    private const KAGI_SOURCE_FETCH_LIMIT_DEFAULT = 3;
+
+    // Default domains to skip when picking a Kagi "Sources:" link to fetch
+    // for an image - these are aggregator/redirect/discussion pages, not
+    // original articles, so any og:image they happen to have is generic
+    // site furniture (a logo, a redirect-page thumbnail) rather than
+    // anything related to the actual story. User-configurable via the
+    // kagi_source_skip_domains setting; this is only the fallback default.
+    private const KAGI_SOURCE_SKIP_DOMAINS_DEFAULT = ['reddit.com', 'news.google.com', 'fark.com'];
 
     // Appended to the author name when it came from twitter:creator/
     // twitter:site rather than a real og:article:author byline, so it's
@@ -112,6 +122,8 @@ class Af_Enhance_Content extends Plugin {
         $enhance_content = $this->host->get($this, "enhance_content", false);
         $upgrade_enclosures = $this->host->get($this, "upgrade_enclosures", false);
         $kagi_source_image = $this->host->get($this, "kagi_source_image", false);
+        $kagi_source_skip_domains = $this->get_kagi_source_skip_domains();
+        $kagi_source_fetch_limit = $this->get_kagi_source_fetch_limit();
         $show_wrapper_site_link = $this->host->get($this, "show_wrapper_site_link", false);
         $cache_images_default = $this->cache_images_default_enabled();
         ?>
@@ -126,7 +138,12 @@ class Af_Enhance_Content extends Plugin {
                     evt.preventDefault();
                     if (this.validate()) {
                         Notify.progress('Saving data...', true);
-                        xhr.post("backend.php", this.getValues(), (reply) => {
+                        const values = this.getValues();
+                        const kagiSkipDomainsEl = document.getElementById('af-enhance-kagi-skip-domains');
+                        if (kagiSkipDomainsEl) values.kagi_source_skip_domains = kagiSkipDomainsEl.value;
+                        const kagiFetchLimitEl = document.getElementById('af-enhance-kagi-fetch-limit');
+                        if (kagiFetchLimitEl) values.kagi_source_fetch_limit = kagiFetchLimitEl.value;
+                        xhr.post("backend.php", values, (reply) => {
                             Notify.info(reply);
                         });
                     }
@@ -185,7 +202,7 @@ class Af_Enhance_Content extends Plugin {
                         <?= __('Backfill short content from og:description, falling back to extracted article text') ?>
                     </label>
                     <p class="help-text" style="margin-left: 48px; color: #666;">
-                        <?= __('Only takes effect together with "Extract Open Graph metadata" above, since it reuses the same page fetch rather than fetching a second time. When an article\'s stored content is shorter than what\'s available, this prepends the page\'s og:description (its social-preview summary) to backfill it. Many sites (Wikipedia is a common example) don\'t publish an og:description at all - for those, this falls back to a simple extraction of the first substantial paragraph(s) of real article text directly from the page\'s own HTML, so link-only feed entries still get a usable summary instead of staying blank. When either the summary or the thumbnail image was assembled this way (rather than pulled from the publisher\'s own og:description/og:image), ✨ is added to the end of the article title so you can tell at a glance.') ?>
+                        <?= __('Only takes effect together with "Extract Open Graph metadata" above, since it reuses the same page fetch rather than fetching a second time. When an article\'s stored content is shorter than what\'s available, this prepends the page\'s og:description (its social-preview summary) to backfill it. Many sites (Wikipedia is a common example) don\'t publish an og:description at all - for those, this falls back to a simple extraction of the first substantial paragraph(s) of real article text directly from the page\'s own HTML, so link-only feed entries still get a usable summary instead of staying blank. When the summary was assembled this way (rather than pulled from the publisher\'s own og:description), ✨ is added to the end of the article title so you can tell at a glance - this only ever reflects the summary text - a thumbnail image extracted from the page (rather than og:image) does not add the icon.') ?>
                     </p>
                 </fieldset>
 
@@ -212,7 +229,21 @@ class Af_Enhance_Content extends Plugin {
                         <?= __('Only applies to kite.kagi.com articles, and only takes effect together with "Extract Open Graph metadata" above. Kagi News\'s own article page always returns the same site-wide banner image regardless of the story, so for image-less articles this parses the "Sources:" list Kagi already includes in its content and fetches one of the original source articles instead, using its real og:image. Replaces the (otherwise useless) fetch of Kagi\'s own page rather than adding an extra one.') ?>
                     </p>
 
-                    <label class="checkbox">
+                    <p class="help-text" style="margin-left: 24px; color: #666; margin-top: 12px;">
+                        <?= __('Skip domains (one per line) - source links whose host matches one of these (or a subdomain of one) are never fetched for an image. These are aggregator/redirect/discussion pages, not original articles - any og:image they happen to have is generic site furniture (a logo, a redirect-page thumbnail) rather than anything related to the actual story.') ?>
+                    </p>
+                    <textarea id="af-enhance-kagi-skip-domains" rows="4"
+                        style="margin-left: 24px; width: calc(100% - 24px); box-sizing: border-box; font-family: monospace;"
+                    ><?= htmlspecialchars(implode("\n", $kagi_source_skip_domains)) ?></textarea>
+
+                    <p class="help-text" style="margin-left: 24px; color: #666; margin-top: 12px;">
+                        <?= __('Maximum Sources links to try (after the skip list above is applied) before giving up and falling back to the generic Kagi banner.') ?>
+                    </p>
+                    <input type="number" id="af-enhance-kagi-fetch-limit" min="1" max="20"
+                        value="<?= (int)$kagi_source_fetch_limit ?>"
+                        style="margin-left: 24px; width: 80px;">
+
+                    <label class="checkbox" style="margin-top: 12px;">
                         <input dojoType="dijit.form.CheckBox" type="checkbox" name="show_wrapper_site_link" value="1"
                             <?= $show_wrapper_site_link ? 'checked' : '' ?>>
                         <?= __('Show a link to the linked site\'s other posts on wrapper/aggregator feeds') ?>
@@ -288,6 +319,16 @@ class Af_Enhance_Content extends Plugin {
 
         $kagi_source_image = ($_POST['kagi_source_image'] ?? '') === '1';
         $this->host->set($this, "kagi_source_image", $kagi_source_image);
+
+        $kagi_source_skip_domains_raw = (string)($_POST['kagi_source_skip_domains'] ?? '');
+        $kagi_source_skip_domains = array_values(array_filter(array_map(
+            fn($line) => strtolower(trim($line)),
+            preg_split('/\r\n|\r|\n/', $kagi_source_skip_domains_raw)
+        )));
+        $this->host->set($this, "kagi_source_skip_domains", json_encode($kagi_source_skip_domains));
+
+        $kagi_source_fetch_limit = max(1, (int)($_POST['kagi_source_fetch_limit'] ?? self::KAGI_SOURCE_FETCH_LIMIT_DEFAULT));
+        $this->host->set($this, "kagi_source_fetch_limit", $kagi_source_fetch_limit);
 
         $show_wrapper_site_link = ($_POST['show_wrapper_site_link'] ?? '') === '1';
         $this->host->set($this, "show_wrapper_site_link", $show_wrapper_site_link);
@@ -499,20 +540,46 @@ class Af_Enhance_Content extends Plugin {
     // into a clean, real anchor tag, dropping the CMS-internal attributes.
     // Runs at display time (every API response) rather than only at import,
     // so it also fixes articles already stored before this existed.
+    //
+    // Other publishers (e.g. The Verge) embed this same escaped-anchor
+    // pattern *inside an attribute value* (a data-caption/data-portal-
+    // copyright image credit) rather than as body text. Decoding that
+    // occurrence into a real <a> tag would splice a literal, unescaped tag
+    // into the middle of an attribute value, corrupting its quoting. Only
+    // the text *between* tags is real body content where this decode is
+    // safe; anything inside a tag's own <...> span (including its
+    // attribute values) is left untouched here.
     private function fix_escaped_anchor_tags($content) {
         if ($content === null || $content === '' || stripos($content, '&lt;a ') === false) {
             return $content;
         }
 
-        $fixed = preg_replace(
-            '/&lt;a\s+href="([^"]+)"[^&]*?&gt;(.*?)&lt;\/a&gt;/is',
-            '<a href="$1">$2</a>',
-            $content
-        );
+        $parts = preg_split('/(<[^>]*>)/', $content, -1, PREG_SPLIT_DELIM_CAPTURE);
+        if ($parts === false) {
+            return $content;
+        }
 
-        // preg_replace returns null on regex failure; never replace real
-        // content with null
-        return $fixed !== null ? $fixed : $content;
+        foreach ($parts as $i => $part) {
+            // Odd indices are the captured <...> tag delimiters themselves;
+            // leave them untouched. Only even indices are real text content.
+            if ($i % 2 === 1 || stripos($part, '&lt;a ') === false) {
+                continue;
+            }
+
+            $fixed = preg_replace(
+                '/&lt;a\s+href="([^"]+)"[^&]*?&gt;(.*?)&lt;\/a&gt;/is',
+                '<a href="$1">$2</a>',
+                $part
+            );
+
+            // preg_replace returns null on regex failure; never replace
+            // real content with null
+            if ($fixed !== null) {
+                $parts[$i] = $fixed;
+            }
+        }
+
+        return implode('', $parts);
     }
 
     // Headline list responses (getHeadlines with show_excerpt) compute their
@@ -934,14 +1001,58 @@ class Af_Enhance_Content extends Plugin {
         return $links[1] ?? [];
     }
 
-    // Tries each Sources link in turn (capped at KAGI_SOURCE_FETCH_LIMIT)
+    private function get_kagi_source_skip_domains(): array {
+        $raw = $this->host->get($this, "kagi_source_skip_domains", null);
+        if ($raw === null) {
+            return self::KAGI_SOURCE_SKIP_DOMAINS_DEFAULT;
+        }
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : self::KAGI_SOURCE_SKIP_DOMAINS_DEFAULT;
+    }
+
+    private function get_kagi_source_fetch_limit(): int {
+        $limit = (int)$this->host->get($this, "kagi_source_fetch_limit", self::KAGI_SOURCE_FETCH_LIMIT_DEFAULT);
+        return max(1, $limit);
+    }
+
+    // Drops any URL whose host matches (or is a subdomain of) one of
+    // $skip_domains - aggregator/redirect/discussion pages whose og:image,
+    // if any, is generic site furniture rather than anything related to
+    // the actual story. Malformed URLs (no parseable host) are left in,
+    // since they'll just fail to fetch on their own.
+    private function filter_kagi_skip_domains(array $urls, array $skip_domains): array {
+        if (empty($skip_domains)) {
+            return $urls;
+        }
+
+        return array_values(array_filter($urls, function($url) use ($skip_domains) {
+            $host = $this->normalize_host($url);
+            if ($host === null) {
+                return true;
+            }
+            foreach ($skip_domains as $skip) {
+                $skip = strtolower(trim($skip));
+                if ($skip === '') {
+                    continue;
+                }
+                if ($host === $skip || str_ends_with($host, '.' . $skip)) {
+                    return false;
+                }
+            }
+            return true;
+        }));
+    }
+
+    // Tries each Sources link in turn (after dropping skip-listed
+    // aggregator/redirect domains, capped at the configured fetch limit)
     // until one both fetches successfully and has a usable og:image.
     // Returns that page's HTML (so the caller's normal OG-extraction path
     // runs unchanged against it), or null if none worked.
     private function fetch_kagi_source_page($content) {
         $source_urls = $this->extract_kagi_source_urls($content);
+        $source_urls = $this->filter_kagi_skip_domains($source_urls, $this->get_kagi_source_skip_domains());
 
-        foreach (array_slice($source_urls, 0, self::KAGI_SOURCE_FETCH_LIMIT) as $source_url) {
+        foreach (array_slice($source_urls, 0, $this->get_kagi_source_fetch_limit()) as $source_url) {
             $html = $this->fetch_article_page($source_url);
             if (empty($html)) {
                 continue;
@@ -1425,10 +1536,15 @@ class Af_Enhance_Content extends Plugin {
     }
 
     private function apply_og_metadata($article, $og_data, $html = '') {
-        // Tracks whether anything in this call was assembled via body-page
-        // extraction rather than pulled from clean og:* metadata, so the
-        // title can be marked with EXTRACTED_SUMMARY_ICON once at the end
-        // regardless of whether it was the image, the summary, or both.
+        // Tracks whether a summary was actually assembled via body-page
+        // extraction (rather than pulled from a clean og:description) and
+        // applied to the content, so the title can be marked with
+        // EXTRACTED_SUMMARY_ICON at the end. Deliberately does NOT track
+        // image-only extraction - the icon means "a summary was added",
+        // and a thumbnail being scraped from the page is a separate,
+        // unrelated fact that shouldn't trigger the same marker (previously
+        // it did, which meant the icon could appear with no summary text
+        // anywhere in the article).
         $used_extraction = false;
 
         // Add og:image as enclosure if we don't have image enclosures,
@@ -1480,10 +1596,6 @@ class Af_Enhance_Content extends Plugin {
 
                 $image_source_label = $image_from_extraction ? 'extracted image' : 'og:image';
                 Debug::log("af_enhance_content: Added $image_source_label as enclosure: $image_url", Debug::LOG_VERBOSE);
-
-                if ($image_from_extraction) {
-                    $used_extraction = true;
-                }
             }
         }
 
@@ -1530,11 +1642,10 @@ class Af_Enhance_Content extends Plugin {
             }
         }
 
-        // Mark the title with EXTRACTED_SUMMARY_ICON when either the image
-        // or the summary above was assembled via body-page extraction
-        // rather than pulled from clean og:* metadata, so it's visually
-        // obvious in list and reader views that something was auto-derived
-        // rather than provided by the site.
+        // Mark the title with EXTRACTED_SUMMARY_ICON when a summary was
+        // assembled via body-page extraction and applied above, so it's
+        // visually obvious in list and reader views that the summary text
+        // was auto-derived rather than provided by the site.
         if ($used_extraction && !empty($article['title'])
                 && !str_ends_with($article['title'], self::EXTRACTED_SUMMARY_ICON)) {
             $article['title'] .= ' ' . self::EXTRACTED_SUMMARY_ICON;

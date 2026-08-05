@@ -1172,8 +1172,41 @@ class Af_Enhance_Content_OG_Test extends TestCase {
 
         $this->assertCount(1, $result['enclosures']);
         $this->assertEquals('https://example.com/hero.jpg', $result['enclosures'][0]->link);
+        $this->assertEquals('Test', $result['title'],
+            'Title should not be marked for image-only extraction - the icon means a summary was added, not a thumbnail');
+    }
+
+    public function test_apply_og_metadata_marks_title_when_both_image_and_summary_extracted() {
+        // Regression test: both an image and a summary being extracted
+        // together must still show exactly one icon, driven by the summary
+        // alone - image extraction must not interfere with or duplicate it.
+        $this->mockHost->expects($this->any())
+            ->method('get')
+            ->willReturnCallback(function($plugin, $key, $default) {
+                if ($key === 'enhance_content') return true;
+                return $default;
+            });
+
+        $article = [
+            'title' => 'Test',
+            'content' => 'Short',
+            'link' => 'https://example.com/article',
+            'enclosures' => []
+        ];
+
+        $og_data = ['image' => null, 'description' => null, 'author' => null, 'tags' => []];
+
+        $html = '<html><body><article>
+            <img src="https://example.com/hero.jpg" width="800" height="600">
+            <p>This extracted paragraph is long enough to clear the minimum length threshold for a summary.</p>
+        </article></body></html>';
+
+        $result = $this->callPrivateMethod('apply_og_metadata', [$article, $og_data, $html]);
+
+        $this->assertCount(1, $result['enclosures']);
+        $this->assertStringContainsString('This extracted paragraph', $result['content']);
         $this->assertEquals('Test ✨', $result['title'],
-            'Title should be marked when the enclosure image came from extraction');
+            'Title should be marked exactly once when both image and summary come from extraction');
     }
 
     public function test_apply_og_metadata_prefers_og_image_over_extraction() {

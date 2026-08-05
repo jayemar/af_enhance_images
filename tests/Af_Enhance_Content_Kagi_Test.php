@@ -100,6 +100,106 @@ class Af_Enhance_Content_Kagi_Test extends TestCase {
     }
 
     // =====================================================================
+    // get_kagi_source_skip_domains() / get_kagi_source_fetch_limit() TESTS
+    // =====================================================================
+
+    public function test_get_kagi_source_skip_domains_returns_default_when_unset() {
+        $this->mockHost->method('get')->willReturnCallback(fn($plugin, $key, $default) => $default);
+
+        $result = $this->callPrivateMethod('get_kagi_source_skip_domains');
+
+        $this->assertEquals(['reddit.com', 'news.google.com', 'fark.com'], $result);
+    }
+
+    public function test_get_kagi_source_skip_domains_returns_saved_value() {
+        $this->mockHost->method('get')->willReturnCallback(function($plugin, $key, $default) {
+            if ($key === 'kagi_source_skip_domains') return json_encode(['example.com', 'other.example']);
+            return $default;
+        });
+
+        $result = $this->callPrivateMethod('get_kagi_source_skip_domains');
+
+        $this->assertEquals(['example.com', 'other.example'], $result);
+    }
+
+    public function test_get_kagi_source_skip_domains_respects_intentionally_empty_list() {
+        // A saved empty JSON array means the user deliberately cleared the
+        // list - it must NOT fall back to the built-in default.
+        $this->mockHost->method('get')->willReturnCallback(function($plugin, $key, $default) {
+            if ($key === 'kagi_source_skip_domains') return json_encode([]);
+            return $default;
+        });
+
+        $result = $this->callPrivateMethod('get_kagi_source_skip_domains');
+
+        $this->assertEquals([], $result);
+    }
+
+    public function test_get_kagi_source_fetch_limit_returns_default_when_unset() {
+        $this->mockHost->method('get')->willReturnCallback(fn($plugin, $key, $default) => $default);
+
+        $result = $this->callPrivateMethod('get_kagi_source_fetch_limit');
+
+        $this->assertEquals(3, $result);
+    }
+
+    public function test_get_kagi_source_fetch_limit_returns_saved_value() {
+        $this->mockHost->method('get')->willReturnCallback(function($plugin, $key, $default) {
+            if ($key === 'kagi_source_fetch_limit') return 7;
+            return $default;
+        });
+
+        $result = $this->callPrivateMethod('get_kagi_source_fetch_limit');
+
+        $this->assertEquals(7, $result);
+    }
+
+    // =====================================================================
+    // filter_kagi_skip_domains() TESTS
+    // =====================================================================
+
+    public function test_filter_kagi_skip_domains_removes_matching_hosts() {
+        $urls = [
+            'https://phys.org/article-1',
+            'https://www.reddit.com/r/climate/comments/xyz/',
+            'https://news.google.com/rss/articles/abc',
+            'https://newsday.com/article-2',
+        ];
+
+        $result = $this->callPrivateMethod('filter_kagi_skip_domains',
+            [$urls, ['reddit.com', 'news.google.com', 'fark.com']]);
+
+        $this->assertEquals([
+            'https://phys.org/article-1',
+            'https://newsday.com/article-2',
+        ], $result);
+    }
+
+    public function test_filter_kagi_skip_domains_matches_subdomains() {
+        $urls = ['https://old.reddit.com/r/climate/comments/xyz/', 'https://phys.org/article-1'];
+
+        $result = $this->callPrivateMethod('filter_kagi_skip_domains', [$urls, ['reddit.com']]);
+
+        $this->assertEquals(['https://phys.org/article-1'], $result);
+    }
+
+    public function test_filter_kagi_skip_domains_keeps_non_matching_hosts() {
+        $urls = ['https://phys.org/article-1', 'https://newsday.com/article-2'];
+
+        $result = $this->callPrivateMethod('filter_kagi_skip_domains', [$urls, ['reddit.com']]);
+
+        $this->assertEquals($urls, $result);
+    }
+
+    public function test_filter_kagi_skip_domains_with_empty_skip_list_keeps_all() {
+        $urls = ['https://phys.org/article-1', 'https://www.reddit.com/r/climate/x'];
+
+        $result = $this->callPrivateMethod('filter_kagi_skip_domains', [$urls, []]);
+
+        $this->assertEquals($urls, $result);
+    }
+
+    // =====================================================================
     // HELPER METHODS
     // =====================================================================
 
